@@ -80,9 +80,12 @@
     #nowline::before { content: 'now'; position: absolute; top: -18px; left: -14px;
         background: var(--now); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; }
 
-    #player { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
+    #player, #usersModal { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
         align-items: center; justify-content: center; z-index: 10; }
-    #player.open { display: flex; }
+    #player.open, #usersModal.open { display: flex; }
+    #uTable td, #uTable th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    #uTable .role { color: var(--muted); }
+    .del { background: transparent; color: var(--now); border: 1px solid var(--line); }
     .pcard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
         width: min(880px, 92vw); overflow: hidden; }
     .phead { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
@@ -104,6 +107,7 @@
         <button class="ghost" id="today">Today</button>
         <div class="spacer"></div>
         <div class="status" id="status">Loading…</div>
+        <button class="ghost" id="usersBtn" style="display:none">Users</button>
         <button class="ghost" id="logout" style="display:none">Log out</button>
     </header>
     <div class="banner" id="banner" style="display:none"></div>
@@ -127,6 +131,29 @@
         </div>
     </div>
 
+    <div id="usersModal">
+        <div class="pcard">
+            <div class="phead">
+                <div class="title">Users</div>
+                <div class="spacer"></div>
+                <button class="ghost" id="uClose">Close</button>
+            </div>
+            <div class="pbody">
+                <table id="uTable" style="width:100%;border-collapse:collapse;font-size:14px"></table>
+                <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:flex-end">
+                    <div><label style="display:block;color:var(--muted);font-size:12px">Username</label>
+                        <input id="uName" style="padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)"></div>
+                    <div><label style="display:block;color:var(--muted);font-size:12px">Password</label>
+                        <input id="uPass" type="password" style="padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)"></div>
+                    <label style="color:var(--muted);font-size:13px"><input type="checkbox" id="uAdmin"> admin</label>
+                    <button id="uAdd">Add user</button>
+                </div>
+                <div class="note" id="uMsg"></div>
+            </div>
+        </div>
+    </div>
+
+<script src="/vendor/mpegts.js"></script>
 <script>
 const WINDOW_MIN = 240;         // visible span
 const PX_PER_MIN = 4;           // 120px per 30 min
@@ -242,29 +269,42 @@ function showBanner(msg) {
     b.style.display = msg ? 'block' : 'none';
 }
 
-async function watchChannel(ch, airing) {
-    const p = $('#player');
-    $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
-    $('#pNote').textContent = 'Requesting stream…';
-    p.classList.add('open');
-    const video = $('#video');
-    video.removeAttribute('src'); video.load();
-    try {
-        const r = await api('/api/watch/' + encodeURIComponent(ch.identifier));
-        if (!r || !r.playlist_url) { $('#pNote').textContent = 'No stream URL returned' + (r && r.error ? ': ' + JSON.stringify(r.error) : ''); return; }
-        // Native HLS (Safari) works directly; other browsers need hls.js and,
-        // for OTA (MPEG-2/AC3), a transcode — added in a later increment.
-        video.src = r.playlist_url;
-        video.play().catch(()=>{});
-        const ota = ch.kind === 'ota';
-        $('#pNote').innerHTML = `Stream: <code>${r.playlist_url}</code>`
-            + (ota ? '<br>Note: OTA channels are MPEG-2/AC3 — most browsers need a transcode (coming soon). Safari may play directly.' : '');
-    } catch (e) {
-        $('#pNote').textContent = 'Error: ' + e.message;
-    }
+let player = null;
+function destroyPlayer() {
+    if (player) { try { player.destroy(); } catch {} player = null; }
+    const v = $('#video'); v.pause(); v.removeAttribute('src'); v.load();
 }
 
-$('#pClose').onclick = () => { $('#player').classList.remove('open'); const v=$('#video'); v.pause(); v.removeAttribute('src'); v.load(); };
+function watchChannel(ch, airing) {
+    const p = $('#player');
+    $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
+    p.classList.add('open');
+    destroyPlayer();
+
+    const video = $('#video');
+    if (!window.mpegts || !mpegts.isSupported()) {
+        $('#pNote').textContent = 'This browser can\'t play live streams (Media Source Extensions unavailable).';
+        return;
+    }
+    const ota = ch.kind === 'ota';
+    $('#pNote').textContent = ota
+        ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…'
+        : 'Starting stream…';
+
+    player = mpegts.createPlayer(
+        { type: 'mpegts', isLive: true, url: '/api/stream/' + encodeURIComponent(ch.identifier) },
+        { liveBufferLatencyChasing: true, lazyLoad: false }
+    );
+    player.attachMediaElement(video);
+    player.on(mpegts.Events.ERROR, (type, detail) => {
+        $('#pNote').textContent = 'Stream error: ' + type + (detail ? ' (' + detail + ')' : '');
+    });
+    player.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
+    player.load();
+    video.play().catch(() => {});
+}
+
+$('#pClose').onclick = () => { $('#player').classList.remove('open'); destroyPlayer(); };
 $('#date').onchange = load;
 $('#today').onclick = () => { setToday(); load(); };
 $('#logout').onclick = async () => { await fetch('/api/logout', {method:'POST'}); location.href='/login'; };
@@ -279,9 +319,43 @@ function initWindow() {
     windowStart = new Date(d.getTime() - 30 * 60000); // start 30 min ago
 }
 
+// ---- admin: user management ----
+async function loadUsers() {
+    const t = $('#uTable');
+    t.innerHTML = '<tr><th>User</th><th>Role</th><th></th></tr>';
+    try {
+        const users = await api('/api/users');
+        for (const u of users) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${u.username}</td><td class="role">${u.role}</td>`
+                + `<td style="text-align:right"><button class="del" data-u="${u.username}">Remove</button></td>`;
+            t.appendChild(tr);
+        }
+        t.querySelectorAll('.del').forEach(b => b.onclick = async () => {
+            if (!confirm('Remove user ' + b.dataset.u + '?')) return;
+            const r = await fetch('/api/users/' + encodeURIComponent(b.dataset.u), { method: 'DELETE' });
+            const j = await r.json();
+            if (!r.ok) $('#uMsg').textContent = j.error || 'Error';
+            else loadUsers();
+        });
+    } catch (e) { $('#uMsg').textContent = e.message; }
+}
+$('#usersBtn').onclick = () => { $('#uMsg').textContent = ''; $('#usersModal').classList.add('open'); loadUsers(); };
+$('#uClose').onclick = () => $('#usersModal').classList.remove('open');
+$('#uAdd').onclick = async () => {
+    $('#uMsg').textContent = '';
+    const r = await fetch('/api/users', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ username: $('#uName').value, password: $('#uPass').value, role: $('#uAdmin').checked ? 'admin' : 'user' }) });
+    const j = await r.json();
+    if (!r.ok) { $('#uMsg').textContent = j.error || 'Error'; return; }
+    $('#uName').value = ''; $('#uPass').value = ''; $('#uAdmin').checked = false;
+    loadUsers();
+};
+
 (async function(){
     const me = await fetch('/api/me').then(r=>r.json()).catch(()=>({}));
-    if (me.loginRequired) $('#logout').style.display = '';
+    if (!me.open) $('#logout').style.display = '';
+    if (me.user && me.user.role === 'admin') $('#usersBtn').style.display = '';
     setToday();
     initWindow();
     await load();
