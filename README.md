@@ -36,12 +36,33 @@ laptop, phone, or TV browser without being locked into the official apps.
 
 ## Requirements
 
-- **Node.js** 20+
-- **ffmpeg** on your `PATH` (for the player — OTA transcode and OTT remux).
-  Grab a static build from [ffmpeg.org](https://ffmpeg.org/download.html).
 - A **Tablo 4th Gen** device on your LAN and a Tablo account.
+- For the **prebuilt Windows release**: nothing else — Node and ffmpeg are
+  included.
+- To **run from source** (any OS): **Node.js 20+** and **ffmpeg** on your
+  `PATH` (static build from [ffmpeg.org](https://ffmpeg.org/download.html)).
 
-## Quick start
+## Download & run (Windows)
+
+The easiest way — no Node or ffmpeg install needed:
+
+1. Grab **`tablo4u-win-x64.zip`** from the
+   [latest release](https://github.com/evilgenius79/Tablo4U/releases/latest)
+   and extract it anywhere.
+2. Rename **`.env.example.txt`** to **`.env`** and fill in your `TABLO_EMAIL`
+   and `TABLO_PASSWORD` (see [Configuration](#configuration-env)).
+3. Run **`tablo4u-win-x64.exe`**. On first start it prints an admin login:
+
+   ```
+   [tablo4u] Created admin account:  admin / 7Gk2pQ9x
+   ```
+4. Open **http://localhost:3400** and sign in.
+
+The exe is self-contained (bundled ffmpeg); your `.env` and `data/` live in the
+same folder as the exe. New releases are published on the
+[Releases](https://github.com/evilgenius79/Tablo4U/releases) page.
+
+## Run from source (any OS)
 
 ```bash
 git clone https://github.com/evilgenius79/Tablo4U.git
@@ -51,12 +72,8 @@ cp .env.example .env        # add your Tablo email + password
 npm start
 ```
 
-Then open **http://localhost:3400**. On first run it prints a generated admin
-login (or set `ADMIN_PASSWORD` to choose your own):
-
-```
-[tablo4u] Created admin account:  admin / 7Gk2pQ9x
-```
+Then open **http://localhost:3400** and sign in with the admin login printed on
+first run (or set `ADMIN_PASSWORD` to choose your own).
 
 **Just want to look around?** No Tablo needed:
 
