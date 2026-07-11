@@ -293,7 +293,14 @@ function watchChannel(ch, airing) {
 
     player = mpegts.createPlayer(
         { type: 'mpegts', isLive: true, url: '/api/stream/' + encodeURIComponent(ch.identifier) },
-        { liveBufferLatencyChasing: true, lazyLoad: false }
+        {
+            lazyLoad: false,
+            liveBufferLatencyChasing: true,
+            liveBufferLatencyMaxLatency: 2.5,
+            liveBufferLatencyMinRemain: 0.4,
+            stashInitialSize: 1024 * 128,
+            autoCleanupSourceBuffer: true
+        }
     );
     player.attachMediaElement(video);
     player.on(mpegts.Events.ERROR, (type, detail) => {

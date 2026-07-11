@@ -44,11 +44,18 @@ function tabloArgs(playlistUrl, transcode) {
         '-i', playlistUrl
     ];
 
+    // Frequent keyframes (~1s) so mpegts.js can start and recover quickly
+    // instead of waiting up to a full GOP (~8s) — the main cause of buffering.
     const output = transcode
-        ? ['-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-c:a', 'aac', '-b:a', '160k']
+        ? [
+            '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+            '-g', '30', '-keyint_min', '30', '-sc_threshold', '0',
+            '-c:a', 'aac', '-b:a', '160k'
+        ]
         : ['-c', 'copy'];
 
-    return [...input, ...output, '-f', 'mpegts', 'pipe:1'];
+    // Flush packets to the pipe immediately for low-latency live delivery.
+    return [...input, ...output, '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'];
 }
 
 /**
@@ -138,7 +145,13 @@ async function handleStream(req, res, opts) {
         cleanup();
     });
 
-    ffmpeg.stderr.on('data', () => { /* swallow unless debugging */ });
+    // Set STREAM_DEBUG=1 to see ffmpeg's progress (speed=, fps, drops) — useful
+    // if a stream buffers: speed below ~1x means the transcode can't keep up.
+    if (process.env.STREAM_DEBUG == '1') {
+        ffmpeg.stderr.on('data', (d) => process.stderr.write('[ffmpeg] ' + d));
+    } else {
+        ffmpeg.stderr.on('data', () => {});
+    }
 
     ffmpeg.on('close', () => { if (!res.writableEnded) res.end(); cleanup(); });
 
