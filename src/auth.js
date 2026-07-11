@@ -8,7 +8,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const { baseDir } = require('./paths');
+
+const DATA_DIR = path.join(baseDir(), 'data');
 
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 

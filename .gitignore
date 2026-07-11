@@ -3,3 +3,9 @@ package-lock.json
 .env
 data/
 logs/
+# build outputs
+tablo4u-win-x64.exe
+tablo4u-linux-x64
+*.zip
+ffmpeg.exe
+dist/

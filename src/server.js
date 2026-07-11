@@ -13,9 +13,14 @@
  *   MOCK=1                         Serve sample data + test-pattern stream
  */
 
-require('dotenv').config();
-
 const path = require('path');
+const fs = require('fs');
+
+const { baseDir } = require('./paths');
+
+// Load .env from next to the exe (when packaged) or the project root.
+require('dotenv').config({ path: path.join(baseDir(), '.env') });
+
 const express = require('express');
 const session = require('express-session');
 const crypto = require('crypto');
@@ -98,6 +103,50 @@ async function getGuideForDate(date) {
 
     return out;
 }
+
+// ---- static assets (loaded into memory at boot) ----
+// Read via fs.readFileSync so this works identically whether running as a
+// script or from a pkg-built exe (embedded assets are read-only in the
+// snapshot; readFileSync is the most reliable way to reach them).
+const CONTENT_TYPES = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.json': 'application/json'
+};
+
+/** @type {Map<string, {body: Buffer, type: string}>} */
+const STATIC = new Map();
+
+function loadStatic() {
+    const root = path.join(__dirname, '..', 'public');
+
+    const walk = (dir, base) => {
+        for (const name of fs.readdirSync(dir)) {
+            const fp = path.join(dir, name);
+
+            const url = base + '/' + name;
+
+            if (fs.statSync(fp).isDirectory()) {
+                walk(fp, url);
+            } else {
+                STATIC.set(url, { body: fs.readFileSync(fp), type: CONTENT_TYPES[path.extname(name)] || 'application/octet-stream' });
+            }
+        }
+    };
+
+    try {
+        walk(root, '');
+    } catch (err) {
+        console.error('[tablo4u] Failed to load web assets:', err && err.message || err);
+    }
+}
+
+loadStatic();
 
 const app = express();
 
@@ -215,9 +264,36 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
 
 // ---- static UI ----
 
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'login.html')));
+/**
+ * @param {import('express').Response} res
+ * @param {string} url
+ * @returns {boolean} whether the asset was served
+ */
+function sendStatic(res, url) {
+    const asset = STATIC.get(url);
 
-app.use(requireAuth, express.static(path.join(__dirname, '..', 'public')));
+    if (!asset) return false;
+
+    res.set('Content-Type', asset.type);
+
+    res.send(asset.body);
+
+    return true;
+}
+
+// Login page is public (no auth).
+app.get('/login', (req, res) => { if (!sendStatic(res, '/login.html')) res.status(404).send('not found'); });
+
+// Everything else behind auth.
+app.use(requireAuth, (req, res, next) => {
+    if (req.method !== 'GET') return next();
+
+    const url = req.path === '/' ? '/index.html' : req.path;
+
+    if (sendStatic(res, url)) return;
+
+    next();
+});
 
 // ---- boot ----
 
