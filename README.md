@@ -31,6 +31,8 @@ laptop, phone, or TV browser without being locked into the official apps.
   (`data/users.json`).
 - 🔐 **Runs on your LAN** — nothing leaves your network except the Tablo login
   itself (over HTTPS). No cloud, no third parties.
+- 🌗 **Light / dark theme** — follows your OS by default, with an in-app
+  toggle (Auto → Light → Dark) that remembers your choice.
 - 🧪 **Mock mode** — explore the whole UI with sample data and a test-pattern
   stream, no Tablo required.
 

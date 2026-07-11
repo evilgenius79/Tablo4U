@@ -4,9 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tablo4U — Sign in</title>
+<script>
+    // Apply the saved theme choice before render (avoids a flash).
+    (function(){ var t = localStorage.getItem('tablo4u-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); })();
+</script>
 <style>
     :root { --bg:#0f1216; --panel:#171b21; --panel2:#1e242c; --line:#2a323c; --text:#e7ecf2; --muted:#93a1b0; --accent:#4aa3ff; --accent2:#2b6fd4; }
-    @media (prefers-color-scheme: light) { :root { --bg:#f4f6f9; --panel:#fff; --panel2:#eef2f6; --line:#d8e0e8; --text:#16202b; --muted:#5c6b7a; --accent:#1e6fe0; --accent2:#1656b0; } }
+    :root[data-theme="light"] { --bg:#f4f6f9; --panel:#fff; --panel2:#eef2f6; --line:#d8e0e8; --text:#16202b; --muted:#5c6b7a; --accent:#1e6fe0; --accent2:#1656b0; }
+    @media (prefers-color-scheme: light) { :root:not([data-theme]) { --bg:#f4f6f9; --panel:#fff; --panel2:#eef2f6; --line:#d8e0e8; --text:#16202b; --muted:#5c6b7a; --accent:#1e6fe0; --accent2:#1656b0; } }
     * { box-sizing:border-box; }
     body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text); font:15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
     .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:28px; width:min(360px,92vw); }

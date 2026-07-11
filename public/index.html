@@ -5,13 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tablo4U</title>
 <style>
+    /* dark = default */
     :root {
         --bg: #0f1216; --panel: #171b21; --panel2: #1e242c; --line: #2a323c;
         --text: #e7ecf2; --muted: #93a1b0; --accent: #4aa3ff; --accent2: #2b6fd4;
         --now: #ff5470; --live: #35c47b;
     }
+    /* explicit light choice */
+    :root[data-theme="light"] {
+        --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef2f6; --line: #d8e0e8;
+        --text: #16202b; --muted: #5c6b7a; --accent: #1e6fe0; --accent2: #1656b0;
+        --now: #e03357; --live: #1f9d5f;
+    }
+    /* auto: follow the OS when no explicit choice is set */
     @media (prefers-color-scheme: light) {
-        :root {
+        :root:not([data-theme]) {
             --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef2f6; --line: #d8e0e8;
             --text: #16202b; --muted: #5c6b7a; --accent: #1e6fe0; --accent2: #1656b0;
             --now: #e03357; --live: #1f9d5f;
@@ -107,6 +115,7 @@
         <button class="ghost" id="today">Today</button>
         <div class="spacer"></div>
         <div class="status" id="status">Loading…</div>
+        <button class="ghost" id="themeBtn" title="Theme">🌓 Auto</button>
         <button class="ghost" id="usersBtn" style="display:none">Users</button>
         <button class="ghost" id="logout" style="display:none">Log out</button>
     </header>
@@ -325,6 +334,23 @@ function initWindow() {
     d.setMinutes(d.getMinutes() < 30 ? 0 : 30, 0, 0);
     windowStart = new Date(d.getTime() - 30 * 60000); // start 30 min ago
 }
+
+// ---- theme (Auto → Light → Dark) ----
+const THEME_KEY = 'tablo4u-theme';
+function applyTheme(t) {
+    const root = document.documentElement;
+    if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t);
+    else root.removeAttribute('data-theme');
+    const btn = $('#themeBtn');
+    if (btn) btn.textContent = t === 'light' ? '☀️ Light' : t === 'dark' ? '🌙 Dark' : '🌓 Auto';
+}
+$('#themeBtn').onclick = () => {
+    const cur = localStorage.getItem(THEME_KEY) || 'auto';
+    const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+};
+applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
 
 // ---- admin: user management ----
 async function loadUsers() {
