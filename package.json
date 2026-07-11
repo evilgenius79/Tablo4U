@@ -1,0 +1,18 @@
+{
+    "name": "tablo4u",
+    "version": "0.1.0",
+    "description": "A native web front-end for Tablo 4th Gen — browse the guide and watch live TV in your browser using Tablo's own JSON API.",
+    "type": "commonjs",
+    "main": "src/server.js",
+    "scripts": {
+        "start": "node src/server.js",
+        "mock": "MOCK=1 node src/server.js"
+    },
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "dotenv": "^16.4.1",
+        "express": "^5.1.0",
+        "express-session": "^1.18.0"
+    }
+}

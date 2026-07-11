@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tablo4U</title>
+<style>
+    :root {
+        --bg: #0f1216; --panel: #171b21; --panel2: #1e242c; --line: #2a323c;
+        --text: #e7ecf2; --muted: #93a1b0; --accent: #4aa3ff; --accent2: #2b6fd4;
+        --now: #ff5470; --live: #35c47b;
+    }
+    @media (prefers-color-scheme: light) {
+        :root {
+            --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef2f6; --line: #d8e0e8;
+            --text: #16202b; --muted: #5c6b7a; --accent: #1e6fe0; --accent2: #1656b0;
+            --now: #e03357; --live: #1f9d5f;
+        }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+        background: var(--bg); color: var(--text);
+        font: 15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        display: flex; flex-direction: column;
+    }
+    header {
+        display: flex; align-items: center; gap: 16px; padding: 12px 18px;
+        background: var(--panel); border-bottom: 1px solid var(--line);
+    }
+    header h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
+    header h1 span { color: var(--accent); }
+    .spacer { flex: 1; }
+    header .status { color: var(--muted); font-size: 13px; }
+    header input[type=date] {
+        background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+        border-radius: 8px; padding: 6px 10px; font: inherit;
+    }
+    button {
+        background: var(--accent2); color: #fff; border: 0; border-radius: 8px;
+        padding: 7px 12px; font: inherit; cursor: pointer;
+    }
+    button.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+    button:hover { filter: brightness(1.08); }
+
+    #grid { flex: 1; overflow: auto; position: relative; }
+    .timeaxis {
+        position: sticky; top: 0; z-index: 3; display: flex;
+        background: var(--panel); border-bottom: 1px solid var(--line);
+        height: 32px; margin-left: var(--chan-w);
+    }
+    .tick { flex: 0 0 auto; border-left: 1px solid var(--line); color: var(--muted);
+        font-size: 12px; padding: 8px 0 0 6px; }
+    .row { display: flex; border-bottom: 1px solid var(--line); min-height: 64px; }
+    .chan {
+        position: sticky; left: 0; z-index: 2; flex: 0 0 var(--chan-w);
+        width: var(--chan-w); background: var(--panel); border-right: 1px solid var(--line);
+        display: flex; flex-direction: column; justify-content: center; padding: 8px 12px;
+        cursor: pointer;
+    }
+    .chan:hover { background: var(--panel2); }
+    .chan .num { color: var(--accent); font-weight: 700; font-size: 13px; }
+    .chan .name { font-weight: 600; }
+    .chan .net { color: var(--muted); font-size: 12px; }
+    .track { position: relative; flex: 1; }
+    .prog {
+        position: absolute; top: 6px; bottom: 6px; background: var(--panel2);
+        border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+        overflow: hidden; cursor: pointer; transition: background .12s;
+    }
+    .prog:hover { background: var(--accent2); color: #fff; border-color: var(--accent); }
+    .prog.live { border-left: 3px solid var(--live); }
+    .prog .t { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; }
+    .prog .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; }
+    .prog:hover .sub { color: #dbe7f7; }
+    #nowline { position: absolute; top: 32px; bottom: 0; width: 2px; background: var(--now);
+        z-index: 2; pointer-events: none; }
+    #nowline::before { content: 'now'; position: absolute; top: -18px; left: -14px;
+        background: var(--now); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; }
+
+    #player { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
+        align-items: center; justify-content: center; z-index: 10; }
+    #player.open { display: flex; }
+    .pcard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+        width: min(880px, 92vw); overflow: hidden; }
+    .phead { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+        border-bottom: 1px solid var(--line); }
+    .phead .title { font-weight: 700; }
+    .phead .spacer { flex: 1; }
+    .pbody { padding: 16px; }
+    .pbody video { width: 100%; border-radius: 10px; background: #000; aspect-ratio: 16/9; }
+    .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
+    .banner { background: #3a2a12; color: #ffcf8f; padding: 8px 18px; font-size: 13px;
+        border-bottom: 1px solid var(--line); }
+    @media (prefers-color-scheme: light) { .banner { background: #fff4e0; color: #8a5a12; } }
+</style>
+</head>
+<body style="--chan-w:180px; --tick-w:120px;">
+    <header>
+        <h1>Tablo<span>4U</span></h1>
+        <input type="date" id="date">
+        <button class="ghost" id="today">Today</button>
+        <div class="spacer"></div>
+        <div class="status" id="status">Loading…</div>
+        <button class="ghost" id="logout" style="display:none">Log out</button>
+    </header>
+    <div class="banner" id="banner" style="display:none"></div>
+    <div id="grid">
+        <div class="timeaxis" id="timeaxis"></div>
+        <div id="nowline" style="display:none"></div>
+        <div id="rows"></div>
+    </div>
+
+    <div id="player">
+        <div class="pcard">
+            <div class="phead">
+                <div class="title" id="pTitle">—</div>
+                <div class="spacer"></div>
+                <button class="ghost" id="pClose">Close</button>
+            </div>
+            <div class="pbody">
+                <video id="video" controls autoplay playsinline></video>
+                <div class="note" id="pNote"></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+const WINDOW_MIN = 240;         // visible span
+const PX_PER_MIN = 4;           // 120px per 30 min
+const $ = (s) => document.querySelector(s);
+
+let channels = [];
+let guide = {};
+let windowStart;
+
+function fmtTime(d) {
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+function chanNum(ch) {
+    const k = ch.ota || ch.ott || {};
+    return (k.major != null) ? `${k.major}.${k.minor}` : '';
+}
+function chanNet(ch) {
+    const k = ch.ota || ch.ott || {};
+    return k.network || ch.name || '';
+}
+
+async function api(path) {
+    const r = await fetch(path);
+    if (r.status === 401) { location.href = '/login'; return null; }
+    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.status);
+    return r.json();
+}
+
+function buildAxis() {
+    const axis = $('#timeaxis');
+    axis.innerHTML = '';
+    for (let m = 0; m < WINDOW_MIN; m += 30) {
+        const t = new Date(windowStart.getTime() + m * 60000);
+        const tick = document.createElement('div');
+        tick.className = 'tick';
+        tick.style.width = (30 * PX_PER_MIN) + 'px';
+        tick.textContent = fmtTime(t);
+        axis.appendChild(tick);
+    }
+}
+
+function render() {
+    buildAxis();
+    const rows = $('#rows');
+    rows.innerHTML = '';
+    const winEnd = new Date(windowStart.getTime() + WINDOW_MIN * 60000);
+    const now = Date.now();
+
+    for (const ch of channels) {
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const c = document.createElement('div');
+        c.className = 'chan';
+        c.innerHTML = `<div class="num">${chanNum(ch)}</div><div class="name">${ch.name || ''}</div><div class="net">${chanNet(ch)}</div>`;
+        c.onclick = () => watchChannel(ch);
+        row.appendChild(c);
+
+        const track = document.createElement('div');
+        track.className = 'track';
+        track.style.width = (WINDOW_MIN * PX_PER_MIN) + 'px';
+
+        for (const a of (guide[ch.identifier] || [])) {
+            const start = new Date(a.datetime);
+            const end = new Date(start.getTime() + (a.duration || 1800) * 1000);
+            if (end <= windowStart || start >= winEnd) continue;
+            const left = Math.max(0, (start - windowStart) / 60000) * PX_PER_MIN;
+            const right = Math.min(WINDOW_MIN, (end - windowStart) / 60000) * PX_PER_MIN;
+            const el = document.createElement('div');
+            el.className = 'prog' + (start.getTime() <= now && now < end.getTime() ? ' live' : '');
+            el.style.left = left + 'px';
+            el.style.width = Math.max(24, right - left - 4) + 'px';
+            el.innerHTML = `<div class="t">${a.title || (a.show && a.show.title) || 'Program'}</div>`
+                + `<div class="sub">${fmtTime(start)} · ${a.description || ''}</div>`;
+            el.title = (a.title || '') + '\n' + (a.description || '');
+            el.onclick = () => watchChannel(ch, a);
+            track.appendChild(el);
+        }
+        row.appendChild(track);
+        rows.appendChild(row);
+    }
+
+    // now line
+    const nl = $('#nowline');
+    if (now >= windowStart.getTime() && now <= winEnd.getTime()) {
+        const off = (now - windowStart.getTime()) / 60000 * PX_PER_MIN;
+        nl.style.left = `calc(var(--chan-w) + ${off}px)`;
+        nl.style.display = 'block';
+    } else {
+        nl.style.display = 'none';
+    }
+}
+
+async function load() {
+    try {
+        const date = $('#date').value;
+        $('#status').textContent = 'Loading guide…';
+        const [chs, g] = await Promise.all([ api('/api/channels'), api('/api/guide?date=' + date) ]);
+        if (!chs) return;
+        channels = chs;
+        guide = (g && g.guide) || {};
+        render();
+        $('#status').textContent = `${channels.length} channels`;
+    } catch (e) {
+        $('#status').textContent = 'Error';
+        showBanner('Could not load from Tablo: ' + e.message);
+    }
+}
+
+function showBanner(msg) {
+    const b = $('#banner');
+    b.textContent = msg;
+    b.style.display = msg ? 'block' : 'none';
+}
+
+async function watchChannel(ch, airing) {
+    const p = $('#player');
+    $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
+    $('#pNote').textContent = 'Requesting stream…';
+    p.classList.add('open');
+    const video = $('#video');
+    video.removeAttribute('src'); video.load();
+    try {
+        const r = await api('/api/watch/' + encodeURIComponent(ch.identifier));
+        if (!r || !r.playlist_url) { $('#pNote').textContent = 'No stream URL returned' + (r && r.error ? ': ' + JSON.stringify(r.error) : ''); return; }
+        // Native HLS (Safari) works directly; other browsers need hls.js and,
+        // for OTA (MPEG-2/AC3), a transcode — added in a later increment.
+        video.src = r.playlist_url;
+        video.play().catch(()=>{});
+        const ota = ch.kind === 'ota';
+        $('#pNote').innerHTML = `Stream: <code>${r.playlist_url}</code>`
+            + (ota ? '<br>Note: OTA channels are MPEG-2/AC3 — most browsers need a transcode (coming soon). Safari may play directly.' : '');
+    } catch (e) {
+        $('#pNote').textContent = 'Error: ' + e.message;
+    }
+}
+
+$('#pClose').onclick = () => { $('#player').classList.remove('open'); const v=$('#video'); v.pause(); v.removeAttribute('src'); v.load(); };
+$('#date').onchange = load;
+$('#today').onclick = () => { setToday(); load(); };
+$('#logout').onclick = async () => { await fetch('/api/logout', {method:'POST'}); location.href='/login'; };
+
+function setToday() {
+    const d = new Date();
+    $('#date').value = d.toISOString().slice(0,10);
+}
+function initWindow() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() < 30 ? 0 : 30, 0, 0);
+    windowStart = new Date(d.getTime() - 30 * 60000); // start 30 min ago
+}
+
+(async function(){
+    const me = await fetch('/api/me').then(r=>r.json()).catch(()=>({}));
+    if (me.loginRequired) $('#logout').style.display = '';
+    setToday();
+    initWindow();
+    await load();
+})();
+</script>
+</body>
+</html>
