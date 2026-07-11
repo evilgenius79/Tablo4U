@@ -122,7 +122,17 @@ const CONTENT_TYPES = {
 /** @type {Map<string, {body: Buffer, type: string}>} */
 const STATIC = new Map();
 
+// Embedded assets (generated at build time). Present in the packaged exe;
+// absent in dev, where we read public/ from disk instead.
+let embedded = null;
+
+try {
+    embedded = require('./assets.generated');
+} catch { /* dev — no generated module, read from disk */ }
+
 function loadStatic() {
+    // Dev: serve live files from public/. Packaged exe: public/ isn't in the
+    // snapshot, so fall back to the embedded module.
     const root = path.join(__dirname, '..', 'public');
 
     const walk = (dir, base) => {
@@ -141,8 +151,16 @@ function loadStatic() {
 
     try {
         walk(root, '');
-    } catch (err) {
-        console.error('[tablo4u] Failed to load web assets:', err && err.message || err);
+    } catch { /* fall through to embedded */ }
+
+    if (STATIC.size === 0 && embedded) {
+        for (const url of Object.keys(embedded)) {
+            STATIC.set(url, { body: Buffer.from(embedded[url].b64, 'base64'), type: embedded[url].type });
+        }
+    }
+
+    if (STATIC.size === 0) {
+        console.error('[tablo4u] No web assets found (neither public/ on disk nor an embedded bundle).');
     }
 }
 

@@ -1,6 +1,6 @@
 {
     "name": "tablo4u",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "A native web front-end for Tablo 4th Gen — browse the guide and watch live TV in your browser using Tablo's own JSON API.",
     "type": "commonjs",
     "main": "src/server.js",
@@ -8,13 +8,9 @@
     "scripts": {
         "start": "node src/server.js",
         "mock": "MOCK=1 node src/server.js",
-        "build:win": "node build.win.js",
-        "build:linux": "node build.linux.js"
-    },
-    "pkg": {
-        "assets": [
-            "public/**/*"
-        ]
+        "bundle-assets": "node scripts/bundle-assets.js",
+        "build:win": "node scripts/bundle-assets.js && node build.win.js",
+        "build:linux": "node scripts/bundle-assets.js && node build.linux.js"
     },
     "engines": {
         "node": ">=20"

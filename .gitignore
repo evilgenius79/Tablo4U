@@ -9,3 +9,4 @@ tablo4u-linux-x64
 *.zip
 ffmpeg.exe
 dist/
+src/assets.generated.js
