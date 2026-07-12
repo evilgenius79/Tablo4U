@@ -241,6 +241,53 @@ class TabloClient {
     }
 
     /**
+     * Builds a map of channel_identifier -> resolution ("hd_1080" | "sd" | …)
+     * by walking the device's per-channel resources (/guide/channels/{id}).
+     * The cloud lineup doesn't carry resolution, so this is how we get HD/SD.
+     * @returns {Promise<Record<string,string>>}
+     */
+    async getChannelResolutions() {
+        /** @type {Record<string,string>} */
+        const map = {};
+
+        let list;
+
+        try {
+            list = await this.deviceReq('GET', '/guide/channels');
+        } catch {
+            return map;
+        }
+
+        if (!Array.isArray(list)) return map;
+
+        var i = 0;
+
+        const worker = async () => {
+            while (i < list.length) {
+                const entry = list[i++];
+
+                const p = typeof entry === 'string' ? entry : (entry && (entry.path || entry.href));
+
+                if (!p) continue;
+
+                try {
+                    const d = await this.deviceReq('GET', p);
+
+                    const c = d && d.channel;
+
+                    if (c && c.channel_identifier && c.resolution) {
+                        map[c.channel_identifier] = c.resolution;
+                    }
+                } catch { /* skip this channel */ }
+            }
+        };
+
+        await Promise.all(Array.from({ length: Math.min(8, list.length) }, worker));
+
+        return map;
+    }
+
+    /**
      * Native channel lineup (JSON, as Tablo returns it).
      * @returns {Promise<any[]>}
      */

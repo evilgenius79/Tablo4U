@@ -46,6 +46,28 @@ const guideCache = new Map();
 
 const GUIDE_TTL = 5 * 60 * 1000;
 
+// channel_identifier -> resolution ("hd_1080"|"sd"|…), from the device. Warmed
+// in the background (177 per-channel device requests) since the cloud lineup
+// doesn't carry it. Refreshed lazily once past the TTL.
+let resCache = { at: 0, map: /** @type {Record<string,string>} */ ({}) };
+
+let resWarming = null;
+
+const RES_TTL = 6 * 60 * 60 * 1000;
+
+function warmResolutions() {
+    if (MOCK || !tablo) return Promise.resolve();
+
+    if (resWarming) return resWarming;
+
+    resWarming = tablo.getChannelResolutions()
+        .then((map) => { if (map && Object.keys(map).length) resCache = { at: Date.now(), map }; })
+        .catch(() => {})
+        .finally(() => { resWarming = null; });
+
+    return resWarming;
+}
+
 /**
  * @param {any[]} channels
  */
@@ -62,6 +84,18 @@ async function getChannels() {
     const channels = MOCK ? mock.channels : (tablo ? await tablo.getChannels() : []);
 
     indexKinds(channels);
+
+    // Merge in HD/SD from the device (cached). Kick a background refresh when
+    // stale — never block the guide on 177 per-channel device requests.
+    if (!MOCK && tablo) {
+        if (Date.now() - resCache.at > RES_TTL) warmResolutions();
+
+        for (const ch of channels) {
+            const r = resCache.map[ch.identifier];
+
+            if (r) ch.resolution = r;
+        }
+    }
 
     return channels;
 }
@@ -462,6 +496,8 @@ app.use(requireAuth, (req, res, next) => {
             console.log(`[tablo4u] Connected to Tablo "${info.device}" as profile "${info.profile}" (${info.tuners} tuners).`);
 
             await getChannels(); // warm the kind index
+
+            warmResolutions(); // background: fetch HD/SD from the device
         } catch (err) {
             console.error('[tablo4u] Tablo login failed:', err && err.message || err);
         }

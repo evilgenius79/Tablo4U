@@ -78,6 +78,11 @@
     .chan .meta { flex: 1; min-width: 0; cursor: pointer; }
     .chan .meta:hover .name { color: var(--accent); }
     .chan .num { color: var(--accent); font-weight: 700; font-size: 12px; }
+    .resbadge { display: inline-block; font-size: 9px; font-weight: 800; line-height: 1; padding: 2px 4px;
+        border-radius: 3px; margin-left: 5px; vertical-align: middle; letter-spacing: .3px; }
+    .resbadge.hd { background: var(--live); color: #04231a; }
+    .resbadge.uhd { background: var(--accent); color: #fff; }
+    .resbadge.sd { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
     .chan .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .chan .net { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .star { flex: 0 0 auto; cursor: pointer; font-size: 17px; color: var(--muted); background: none;
@@ -264,6 +269,14 @@ function chanNum(ch) { const k = ch.ota || ch.ott || {}; return (k.major != null
 function chanNet(ch) { const k = ch.ota || ch.ott || {}; return k.network || ch.name || ''; }
 function chanLogo(ch) { const l = (ch.logos || []).find(x => x.kind === 'lightLarge') || (ch.logos || [])[0]; return l && l.url; }
 function chanCall(ch) { const k = ch.ota || ch.ott || {}; return (k.callSign || ch.name || chanNum(ch) || '?').toString(); }
+function resBadge(ch) {
+    const r = (ch.resolution || '').toLowerCase();
+    if (!r) return '';
+    if (r.startsWith('uhd') || r.includes('2160') || r.includes('4k')) return '<span class="resbadge uhd">4K</span>';
+    if (r.startsWith('hd') || r.includes('1080') || r.includes('720')) return '<span class="resbadge hd">HD</span>';
+    if (r.startsWith('sd') || r.includes('480')) return '<span class="resbadge sd">SD</span>';
+    return '';
+}
 
 async function api(path, opts) {
     const r = await fetch(path, opts);
@@ -332,7 +345,7 @@ function render() {
         const isFav = favorites.has(ch.identifier);
         c.innerHTML =
             (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.parentNode.replaceChild(Object.assign(document.createElement('div'),{className:'logo nologo',textContent:this.dataset.call}),this)" data-call="${esc(chanCall(ch))}">` : `<div class="logo nologo">${esc(chanCall(ch))}</div>`)
-            + `<div class="meta"><div class="num">${esc(chanNum(ch))}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
+            + `<div class="meta"><div class="num">${esc(chanNum(ch))}${resBadge(ch)}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
             + `<button class="star ${isFav ? 'fav' : ''}" title="Favorite">${isFav ? '★' : '☆'}</button>`;
         c.querySelector('.meta').onclick = () => watchChannel(ch);
         c.querySelector('.star').onclick = (e) => { e.stopPropagation(); toggleFav(ch); };
