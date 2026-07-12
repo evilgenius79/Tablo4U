@@ -12,8 +12,10 @@ const now = Date.now();
  * @param {string} color
  * @returns {string} data URI
  */
-function logo(text, color) {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" rx="8" fill="${color}"/><text x="60" y="38" font-family="Arial" font-size="22" font-weight="bold" fill="#fff" text-anchor="middle">${text}</text></svg>`;
+function logo(text) {
+    // Mirror real Tablo "lightLarge" logos: white artwork on a transparent
+    // background (so the UI's dark logo chip is what makes them legible).
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><text x="60" y="40" font-family="Arial" font-size="26" font-weight="bold" fill="#fff" text-anchor="middle">${text}</text></svg>`;
 
     return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
 }
@@ -57,7 +59,7 @@ const channels = [
     { identifier: 'S1_005_01', name: 'KING', kind: 'ota', logos: [{ kind: 'lightLarge', url: logo('NBC', '#6b4fbb') }], ota: { major: 5, minor: 1, network: 'NBC', callSign: 'KING' } },
     { identifier: 'S1_007_01', name: 'KIRO', kind: 'ota', logos: [{ kind: 'lightLarge', url: logo('CBS', '#0b6cc4') }], ota: { major: 7, minor: 1, network: 'CBS', callSign: 'KIRO' } },
     { identifier: 'S1_013_01', name: 'KCTS', kind: 'ota', logos: [{ kind: 'lightLarge', url: logo('PBS', '#2b3a67') }], ota: { major: 13, minor: 1, network: 'PBS', callSign: 'KCTS' } },
-    { identifier: 'S1_011_01', name: 'KSTW', kind: 'ota', logos: [{ kind: 'lightLarge', url: logo('CW', '#1f9d5f') }], ota: { major: 11, minor: 1, network: 'CW', callSign: 'KSTW' } },
+    { identifier: 'S1_011_01', name: 'KSTW', kind: 'ota', logos: [], ota: { major: 11, minor: 1, network: 'CW', callSign: 'KSTW' } },
     { identifier: 'O1_206_00', name: 'Pluto Movies', kind: 'ott', logos: [{ kind: 'lightLarge', url: logo('PLUTO', '#c2410c') }], ott: { major: 206, minor: 0, network: 'Pluto Movies', callSign: 'PLUTO', streamUrl: '' } }
 ];
 

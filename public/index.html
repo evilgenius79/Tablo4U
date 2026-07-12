@@ -68,7 +68,13 @@
         width: var(--chan-w); background: var(--panel); border-right: 1px solid var(--line);
         display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px;
     }
-    .chan .logo { width: 40px; height: 30px; object-fit: contain; border-radius: 4px; flex: 0 0 auto; background: var(--panel2); }
+    /* Tablo's logos are white-on-transparent (the "lightLarge" variant), so
+       they'd vanish on a light background. Pin every logo to a fixed dark chip
+       so it reads the same in both light and dark themes. */
+    .chan .logo { width: 42px; height: 32px; object-fit: contain; border-radius: 5px; flex: 0 0 auto;
+        background: #12161c; padding: 3px; }
+    .chan .logo.nologo { display: flex; align-items: center; justify-content: center; padding: 2px;
+        font-size: 10px; font-weight: 700; color: #cdd7e2; letter-spacing: .3px; text-align: center; overflow: hidden; }
     .chan .meta { flex: 1; min-width: 0; cursor: pointer; }
     .chan .meta:hover .name { color: var(--accent); }
     .chan .num { color: var(--accent); font-weight: 700; font-size: 12px; }
@@ -126,7 +132,7 @@
     .recent-item { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line);
         border-radius: 10px; cursor: pointer; }
     .recent-item:hover { background: var(--panel2); }
-    .recent-item img { width: 44px; height: 30px; object-fit: contain; border-radius: 4px; }
+    .recent-item img { width: 44px; height: 32px; object-fit: contain; border-radius: 5px; background: #12161c; padding: 3px; }
 
     @media (max-width: 640px) {
         body { --chan-w: 132px !important; }
@@ -246,6 +252,7 @@ function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute:
 function chanNum(ch) { const k = ch.ota || ch.ott || {}; return (k.major != null) ? `${k.major}.${k.minor}` : ''; }
 function chanNet(ch) { const k = ch.ota || ch.ott || {}; return k.network || ch.name || ''; }
 function chanLogo(ch) { const l = (ch.logos || []).find(x => x.kind === 'lightLarge') || (ch.logos || [])[0]; return l && l.url; }
+function chanCall(ch) { const k = ch.ota || ch.ott || {}; return (k.callSign || ch.name || chanNum(ch) || '?').toString(); }
 
 async function api(path, opts) {
     const r = await fetch(path, opts);
@@ -313,7 +320,7 @@ function render() {
         const logoUrl = chanLogo(ch);
         const isFav = favorites.has(ch.identifier);
         c.innerHTML =
-            (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.style.visibility='hidden'">` : '<div class="logo"></div>')
+            (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.parentNode.replaceChild(Object.assign(document.createElement('div'),{className:'logo nologo',textContent:this.dataset.call}),this)" data-call="${esc(chanCall(ch))}">` : `<div class="logo nologo">${esc(chanCall(ch))}</div>`)
             + `<div class="meta"><div class="num">${esc(chanNum(ch))}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
             + `<button class="star ${isFav ? 'fav' : ''}" title="Favorite">${isFav ? '★' : '☆'}</button>`;
         c.querySelector('.meta').onclick = () => watchChannel(ch);
@@ -447,7 +454,7 @@ $('#recentBtn').onclick = () => {
         const ch = chById[r.id]; if (!ch) continue;
         const item = document.createElement('div'); item.className = 'recent-item';
         const logoUrl = chanLogo(ch);
-        item.innerHTML = (logoUrl ? `<img src="${esc(logoUrl)}" alt="">` : '<div class="logo"></div>')
+        item.innerHTML = (logoUrl ? `<img src="${esc(logoUrl)}" alt="">` : `<div class="logo nologo">${esc(chanCall(ch))}</div>`)
             + `<div><div class="name">${esc(ch.name)}</div><div class="net">${esc(chanNum(ch))} · ${esc(chanNet(ch))}</div></div>`;
         item.onclick = () => { $('#recentModal').classList.remove('open'); watchChannel(ch); };
         list.appendChild(item);
