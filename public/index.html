@@ -148,7 +148,7 @@
         <h1>Tablo<span>4U</span></h1>
         <input type="date" id="date">
         <button class="ghost" id="today">Today</button>
-        <input type="search" id="search" placeholder="Search guide…">
+        <input type="search" id="search" name="guide-q" autocomplete="off" placeholder="Search guide…">
         <button class="ghost" id="favFilter" title="Show favorites only">★ Favorites</button>
         <button class="ghost" id="recentBtn">Recent</button>
         <div class="spacer"></div>
@@ -157,6 +157,7 @@
         <button class="ghost" id="usersBtn" style="display:none">Users</button>
         <button class="ghost" id="logout" style="display:none">Log out</button>
     </header>
+    <div id="fatal" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#b00020;color:#fff;padding:8px 12px;font:13px/1.4 system-ui;cursor:pointer;"></div>
     <div id="grid">
         <div class="timeaxis" id="timeaxis"></div>
         <div id="nowline" style="display:none"></div>
@@ -238,6 +239,16 @@ const DAY_MIN = 1440, PX_PER_MIN = 3;   // full-day scrollable timeline
 const PAGE_SIZE = 30;                    // channels rendered per page
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// Surface any uncaught error/rejection on-screen instead of a mystery blank.
+function showFatal(msg) {
+    const el = $('#fatal'); if (!el) return;
+    el.textContent = '⚠ ' + msg + '   (click to dismiss)';
+    el.style.display = 'block';
+    el.onclick = () => { el.style.display = 'none'; };
+}
+window.addEventListener('error', (e) => showFatal((e.message || 'error') + (e.filename ? ` @ ${(e.filename + '').split('/').pop()}:${e.lineno}` : '')));
+window.addEventListener('unhandledrejection', (e) => showFatal('promise: ' + ((e.reason && (e.reason.message || e.reason)) || 'rejection')));
 
 let channels = [], guide = {}, windowStart;
 let favorites = new Set(), recent = [];
@@ -434,6 +445,7 @@ $('#video').addEventListener('leavepictureinpicture', () => {
     if (!closingPlayer && player) $('#player').classList.add('open');
 });
 function watchChannel(ch, airing) {
+  try {
     $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
     $('#player').classList.add('open');
     destroyPlayer();
@@ -455,6 +467,9 @@ function watchChannel(ch, airing) {
     player.on(mpegts.Events.ERROR, (t, d) => { $('#pNote').textContent = 'Stream error: ' + t + (d ? ' (' + d + ')' : ''); });
     player.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
     player.load(); video.play().catch(() => {});
+  } catch (e) {
+    $('#pNote').textContent = 'Could not start player: ' + (e && e.message || e);
+  }
 }
 $('#pClose').onclick = () => closePlayer();
 $('#pipBtn').onclick = async () => {
