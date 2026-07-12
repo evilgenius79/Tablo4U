@@ -252,8 +252,20 @@ function showFatal(msg) {
     el.style.display = 'block';
     el.onclick = () => { el.style.display = 'none'; };
 }
-window.addEventListener('error', (e) => showFatal((e.message || 'error') + (e.filename ? ` @ ${(e.filename + '').split('/').pop()}:${e.lineno}` : '')));
-window.addEventListener('unhandledrejection', (e) => showFatal('promise: ' + ((e.reason && (e.reason.message || e.reason)) || 'rejection')));
+// Benign player/MSE noise (mpegts.js teardown races, SourceBuffer detach) —
+// these fire when a stream ends or a channel is switched and are harmless, so
+// don't alarm the user with the red banner; just log them.
+const BENIGN_ERR = /SourceBuffer|buffered|MediaSource|media source|mpegts|removed from the parent|append|MSE/i;
+window.addEventListener('error', (e) => {
+    const m = e.message || 'error';
+    if (BENIGN_ERR.test(m)) { console.warn('[player]', m); return; }
+    showFatal(m + (e.filename ? ` @ ${(e.filename + '').split('/').pop()}:${e.lineno}` : ''));
+});
+window.addEventListener('unhandledrejection', (e) => {
+    const m = String((e.reason && (e.reason.message || e.reason)) || 'rejection');
+    if (BENIGN_ERR.test(m)) { console.warn('[player]', m); return; }
+    showFatal('promise: ' + m);
+});
 
 let channels = [], guide = {}, windowStart;
 let favorites = new Set(), recent = [];
@@ -435,8 +447,16 @@ function showDetail(ch, a) {
 let player = null;
 let closingPlayer = false;   // true while we intentionally tear the stream down
 function destroyPlayer() {
-    if (player) { try { player.destroy(); } catch {} player = null; }
-    const v = $('#video'); v.pause(); v.removeAttribute('src'); v.load();
+    if (player) {
+        // Tear down in order (pause → unload → detach → destroy) to avoid the
+        // mpegts.js "SourceBuffer removed from parent media source" race.
+        try { player.pause(); } catch {}
+        try { player.unload(); } catch {}
+        try { player.detachMediaElement(); } catch {}
+        try { player.destroy(); } catch {}
+        player = null;
+    }
+    const v = $('#video'); try { v.pause(); v.removeAttribute('src'); v.load(); } catch {}
 }
 function inPiP() { return document.pictureInPictureElement === $('#video'); }
 // Close the player UI. While the video is popped out to picture-in-picture we
