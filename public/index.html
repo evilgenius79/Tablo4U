@@ -138,6 +138,18 @@
         border-radius: 10px; cursor: pointer; }
     .recent-item:hover { background: var(--panel2); }
     .recent-item img { width: 44px; height: 32px; object-fit: contain; border-radius: 5px; background: #12161c; padding: 3px; }
+    /* DVR */
+    #recBtn { color: var(--now); }
+    .rec-row { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line);
+        border-radius: 10px; margin-bottom: 8px; }
+    .rec-row .info { flex: 1; min-width: 0; }
+    .rec-row .info .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rec-row .info .s { color: var(--muted); font-size: 12px; }
+    .rec-row .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--now); flex: 0 0 auto;
+        animation: blink 1.4s ease-in-out infinite; }
+    @keyframes blink { 50% { opacity: .3; } }
+    .dvr-h { font-size: 13px; color: var(--muted); margin: 6px 0 8px; text-transform: uppercase; letter-spacing: .4px; }
+    .rec-row button { padding: 5px 10px; font-size: 13px; }
 
     @media (max-width: 640px) {
         body { --chan-w: 132px !important; }
@@ -156,6 +168,7 @@
         <input type="search" id="search" name="guide-q" autocomplete="off" placeholder="Search guide…">
         <button class="ghost" id="favFilter" title="Show favorites only">★ Favorites</button>
         <button class="ghost" id="recentBtn">Recent</button>
+        <button class="ghost" id="dvrBtn" title="Recordings">⏺ DVR</button>
         <div class="spacer"></div>
         <div class="status" id="status">Loading…</div>
         <button class="ghost" id="themeBtn" title="Theme">🌓 Auto</button>
@@ -180,6 +193,7 @@
             <div class="phead">
                 <div class="title" id="pTitle">—</div>
                 <div class="spacer"></div>
+                <button class="ghost" id="recBtn" title="Record this channel" style="display:none">● Rec</button>
                 <button class="ghost" id="pipBtn" title="Picture-in-picture">⧉ PiP</button>
                 <button class="ghost" id="pClose">Close</button>
             </div>
@@ -234,6 +248,43 @@
                     <button id="uAdd">Add user</button>
                 </div>
                 <div class="note" id="uMsg"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- record dialog -->
+    <div id="recordModal" class="overlay">
+        <div class="pcard" style="width:min(460px,96vw)">
+            <div class="phead">
+                <div class="title">Record</div>
+                <div class="spacer"></div>
+                <button class="ghost" id="recCancel">Cancel</button>
+            </div>
+            <div class="pbody">
+                <label style="display:block;color:var(--muted);font-size:12px;margin-bottom:4px">Name</label>
+                <input id="recName" style="width:100%;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)">
+                <label style="display:block;color:var(--muted);font-size:12px;margin:12px 0 4px">Record for (minutes)</label>
+                <input id="recMinutes" type="number" min="1" max="360" value="60" style="width:120px;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)">
+                <div class="note" id="recDest" style="margin-top:12px"></div>
+                <div style="display:flex;gap:8px;margin-top:16px"><button id="recStart">● Start recording</button></div>
+                <div class="note" id="recMsg"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DVR / recordings -->
+    <div id="dvrModal" class="overlay">
+        <div class="pcard">
+            <div class="phead">
+                <div class="title">Recordings</div>
+                <div class="spacer"></div>
+                <button class="ghost" id="dvrClose">Close</button>
+            </div>
+            <div class="pbody">
+                <div class="note" id="dvrDest" style="margin-bottom:12px"></div>
+                <div id="dvrActive"></div>
+                <div id="dvrSaved"></div>
+                <div class="note" id="dvrMsg"></div>
             </div>
         </div>
     </div>
@@ -525,32 +576,52 @@ async function closePlayer() {
 $('#video').addEventListener('leavepictureinpicture', () => {
     if (!closingPlayer && player) $('#player').classList.add('open');
 });
-function watchChannel(ch, airing) {
-  try {
-    $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
-    $('#player').classList.add('open');
+let currentCh = null, currentAiring = null;
+
+// Shared mpegts player setup for both live channels and saved recordings.
+function startPlayer(url, isLive) {
     destroyPlayer();
-    // bump recent locally + let the server record it (stream endpoint does too)
-    recent = [{ id: ch.identifier, at: Date.now() }, ...recent.filter(r => r.id !== ch.identifier)].slice(0, 20);
     const video = $('#video');
     if (!window.mpegts || !mpegts.isSupported()) {
-        $('#pNote').textContent = "This browser can't play live streams (Media Source Extensions unavailable).";
-        return;
+        $('#pNote').textContent = "This browser can't play video (Media Source Extensions unavailable).";
+        return null;
     }
+    const cfg = isLive
+        // Gentle latency chasing — aggressive chasing made OTT feeds skip/break up.
+        ? { lazyLoad: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 6.0, liveBufferLatencyMinRemain: 1.0, autoCleanupSourceBuffer: true }
+        : { lazyLoad: false };
+    player = mpegts.createPlayer({ type: 'mpegts', isLive, url }, cfg);
+    player.attachMediaElement(video);
+    player.on(mpegts.Events.ERROR, (t, d) => { $('#pNote').textContent = 'Playback error: ' + t + (d ? ' (' + d + ')' : ''); });
+    player.load(); video.play().catch(() => {});
+    return player;
+}
+
+function watchChannel(ch, airing) {
+  try {
+    currentCh = ch; currentAiring = airing || null;
+    $('#recBtn').style.display = '';
+    $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
+    $('#player').classList.add('open');
+    // bump recent locally + let the server record it (stream endpoint does too)
+    recent = [{ id: ch.identifier, at: Date.now() }, ...recent.filter(r => r.id !== ch.identifier)].slice(0, 20);
     $('#pNote').textContent = ch.kind === 'ota'
         ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…' : 'Starting stream…';
-    player = mpegts.createPlayer(
-        { type: 'mpegts', isLive: true, url: '/api/stream/' + encodeURIComponent(ch.identifier) },
-        // Gentle latency chasing — aggressive chasing made OTT feeds skip/break up.
-        { lazyLoad: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 6.0, liveBufferLatencyMinRemain: 1.0, autoCleanupSourceBuffer: true }
-    );
-    player.attachMediaElement(video);
-    player.on(mpegts.Events.ERROR, (t, d) => { $('#pNote').textContent = 'Stream error: ' + t + (d ? ' (' + d + ')' : ''); });
-    player.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
-    player.load(); video.play().catch(() => {});
+    const p = startPlayer('/api/stream/' + encodeURIComponent(ch.identifier), true);
+    if (p) p.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
   } catch (e) {
     $('#pNote').textContent = 'Could not start player: ' + (e && e.message || e);
   }
+}
+
+// Play a saved recording (VOD, not live).
+function playRecording(rec) {
+    currentCh = null; currentAiring = null;
+    $('#recBtn').style.display = 'none';
+    $('#pTitle').textContent = rec.title || rec.name || 'Recording';
+    $('#player').classList.add('open');
+    $('#pNote').textContent = 'Playing recording…';
+    startPlayer('/api/recordings/' + encodeURIComponent(rec.id) + '/file', false);
 }
 $('#pClose').onclick = () => closePlayer();
 $('#pipBtn').onclick = async () => {
@@ -584,6 +655,94 @@ $('#recentBtn').onclick = () => {
 };
 $('#rClose').onclick = () => $('#recentModal').classList.remove('open');
 $('#dClose').onclick = () => $('#detailModal').classList.remove('open');
+
+// ---- DVR / recordings ----
+let isAdmin = false;
+let recDir = '';
+let recTarget = null;
+
+$('#recBtn').onclick = () => openRecord(currentCh, currentAiring);
+
+async function openRecord(ch, airing) {
+    if (!ch) return;
+    recTarget = ch;
+    const prog = airing && airing.title;
+    $('#recName').value = (prog ? `${ch.name} - ${prog}` : (ch.name || 'Recording'));
+    let mins = 60;
+    if (airing && airing.datetime) {
+        const end = new Date(new Date(airing.datetime).getTime() + (airing.duration || 3600) * 1000);
+        const rem = Math.ceil((end - Date.now()) / 60000);
+        if (rem > 0 && rem <= 358) mins = rem + 2; // record to program end + small pad
+    }
+    $('#recMinutes').value = mins;
+    $('#recMsg').textContent = '';
+    $('#recDest').textContent = '';
+    $('#recordModal').classList.add('open');
+    try { const d = await api('/api/recordings'); if (d) { recDir = d.dir || ''; $('#recDest').textContent = recDir ? ('Saves to: ' + recDir) : ''; } } catch {}
+}
+$('#recCancel').onclick = () => $('#recordModal').classList.remove('open');
+$('#recStart').onclick = async () => {
+    if (!recTarget) return;
+    $('#recMsg').textContent = 'Starting…';
+    try {
+        const r = await fetch('/api/recordings/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channelId: recTarget.identifier, channelName: recTarget.name, title: $('#recName').value, minutes: parseInt($('#recMinutes').value, 10) || 60 }) });
+        const j = await r.json();
+        if (!r.ok) { $('#recMsg').textContent = j.error || 'Could not start recording'; return; }
+        $('#recordModal').classList.remove('open');
+    } catch (e) { $('#recMsg').textContent = e.message; }
+};
+
+$('#dvrBtn').onclick = () => { $('#dvrMsg').textContent = ''; $('#dvrModal').classList.add('open'); refreshDvr(); };
+$('#dvrClose').onclick = () => $('#dvrModal').classList.remove('open');
+
+function recRow(rec, active) {
+    const el = document.createElement('div'); el.className = 'rec-row';
+    const when = new Date(rec.startedAt).toLocaleString();
+    const mb = rec.bytes ? Math.round(rec.bytes / 1e6) + ' MB' : '';
+    const sub = active
+        ? `${esc(rec.channelName)} · started ${new Date(rec.startedAt).toLocaleTimeString()}`
+        : `${esc(rec.channelName)} · ${esc(when)}${mb ? ' · ' + mb : ''}${rec.status === 'failed' ? ' · failed' : rec.status === 'stopped' ? ' · stopped' : ''}`;
+    el.innerHTML = (active ? '<span class="dot"></span>' : '') + `<div class="info"><div class="t">${esc(rec.title)}</div><div class="s">${sub}</div></div>`;
+    if (active) {
+        const stop = document.createElement('button'); stop.className = 'ghost'; stop.textContent = '■ Stop';
+        stop.onclick = async () => { stop.disabled = true; await fetch('/api/recordings/' + rec.id + '/stop', { method: 'POST' }); setTimeout(refreshDvr, 600); };
+        el.appendChild(stop);
+    } else {
+        if (rec.bytes > 0) {
+            const play = document.createElement('button'); play.textContent = '▶ Play';
+            play.onclick = () => { $('#dvrModal').classList.remove('open'); playRecording(rec); };
+            el.appendChild(play);
+            const dl = document.createElement('button'); dl.className = 'ghost'; dl.textContent = '⬇'; dl.title = 'Download';
+            dl.onclick = () => window.open('/api/recordings/' + rec.id + '/file', '_blank');
+            el.appendChild(dl);
+        }
+        const del = document.createElement('button'); del.className = 'del'; del.textContent = '🗑'; del.title = 'Delete';
+        del.onclick = async () => { if (!confirm('Delete this recording?')) return; await fetch('/api/recordings/' + rec.id, { method: 'DELETE' }); refreshDvr(); };
+        el.appendChild(del);
+    }
+    return el;
+}
+
+async function refreshDvr() {
+    let d;
+    try { d = await api('/api/recordings'); } catch (e) { $('#dvrMsg').textContent = e.message; return; }
+    if (!d) return;
+    recDir = d.dir || '';
+    $('#dvrDest').innerHTML = `Saving to <b>${esc(recDir)}</b> · ${d.tuners.inUse}/${d.tuners.limit} tuners in use`
+        + (isAdmin ? ' <button class="ghost" id="dvrEditDir" style="padding:3px 9px;font-size:12px">Change…</button>' : '');
+    if (isAdmin) $('#dvrEditDir').onclick = async () => {
+        const np = prompt('Recordings folder (a path on the server running Tablo4U):', recDir);
+        if (!np) return;
+        const r = await fetch('/api/settings/recordings-dir', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: np }) });
+        const j = await r.json(); if (!r.ok) $('#dvrMsg').textContent = j.error || 'Error'; else refreshDvr();
+    };
+    const A = $('#dvrActive'); A.innerHTML = d.active.length ? '<div class="dvr-h">Recording now</div>' : '';
+    for (const rec of d.active) A.appendChild(recRow(rec, true));
+    const S = $('#dvrSaved');
+    S.innerHTML = d.saved.length ? '<div class="dvr-h">Saved</div>' : (d.active.length ? '' : '<div class="empty">No recordings yet.</div>');
+    for (const rec of d.saved) S.appendChild(recRow(rec, false));
+}
 
 // ---- search / filters ----
 let searchTimer;
@@ -649,6 +808,7 @@ $('#uAdd').onclick = async () => {
 (async function () {
     const me = await fetch('/api/me').then(r => r.json()).catch(() => ({}));
     if (!me.open) $('#logout').style.display = '';
+    isAdmin = !!(me.user && me.user.role === 'admin') || !!me.open;
     if (me.user && me.user.role === 'admin') $('#usersBtn').style.display = '';
     setToday(); await load();
 })();

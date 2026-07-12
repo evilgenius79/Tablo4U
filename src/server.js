@@ -27,6 +27,8 @@ const crypto = require('crypto');
 const { TabloClient } = require('./tablo');
 const Auth = require('./auth');
 const { handleStream } = require('./stream');
+const recorder = require('./recorder');
+const tuners = require('./tuners');
 const mock = require('./mock');
 
 const PORT = parseInt(process.env.PORT || '3400', 10);
@@ -40,6 +42,9 @@ var tablo = null;
 
 /** channelId -> 'ota'|'ott' */
 const channelKind = new Map();
+
+/** channelId -> display name (for recording metadata). */
+const channelName = new Map();
 
 /** In-memory guide cache: date -> { at, data }. */
 const guideCache = new Map();
@@ -76,6 +81,10 @@ function indexKinds(channels) {
         if (!ch || !ch.identifier) continue;
 
         channelKind.set(ch.identifier, ch.kind);
+
+        const k = ch.ota || ch.ott || {};
+
+        channelName.set(ch.identifier, ch.name || k.callSign || ch.identifier);
     }
 }
 
@@ -393,9 +402,90 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
         mock: MOCK,
         tablo,
         kindOf: (id) => channelKind.get(id),
-        tunerCount: tablo ? tablo.tuners : 4,
         log: (m) => console.log('[tablo4u] ' + m)
     });
+});
+
+// ---- DVR / recordings ----
+
+app.get('/api/recordings', requireAuth, (req, res) => {
+    res.json(recorder.list());
+});
+
+app.post('/api/recordings/start', requireAuth, async (req, res) => {
+    try {
+        const { channelId, title, minutes } = req.body || {};
+
+        if (!channelId) return res.status(400).json({ error: 'channelId required' });
+
+        const meta = await recorder.start({
+            mock: MOCK,
+            tablo,
+            channelId,
+            channelName: channelName.get(channelId) || (req.body || {}).channelName || channelId,
+            kind: channelKind.get(channelId),
+            title,
+            minutes: Math.max(1, Math.min(360, parseInt(minutes, 10) || 60)),
+            log: (m) => console.log('[tablo4u] ' + m)
+        });
+
+        res.json({ ok: true, recording: meta });
+    } catch (err) {
+        res.status(503).json({ error: String(err && err.message || err) });
+    }
+});
+
+app.post('/api/recordings/:id/stop', requireAuth, (req, res) => {
+    res.json({ ok: recorder.stop(req.params.id) });
+});
+
+app.delete('/api/recordings/:id', requireAuth, (req, res) => {
+    res.json({ ok: recorder.remove(req.params.id) });
+});
+
+// Play back a saved recording (MPEG-TS, with range support for seeking).
+app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
+    const rec = recorder.get(req.params.id);
+
+    if (!rec || !rec.file || !fs.existsSync(rec.file)) return res.status(404).send('not found');
+
+    const size = fs.statSync(rec.file).size;
+
+    res.setHeader('Content-Type', 'video/mp2t');
+
+    const range = req.headers.range;
+
+    if (range) {
+        const m = /bytes=(\d+)-(\d*)/.exec(range);
+
+        const startB = m ? parseInt(m[1], 10) : 0;
+
+        const endB = m && m[2] ? parseInt(m[2], 10) : size - 1;
+
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${startB}-${endB}/${size}`);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', endB - startB + 1);
+
+        fs.createReadStream(rec.file, { start: startB, end: endB }).pipe(res);
+    } else {
+        res.setHeader('Content-Length', size);
+
+        fs.createReadStream(rec.file).pipe(res);
+    }
+});
+
+// Recordings folder (admin): view / change the save location.
+app.get('/api/settings/recordings-dir', requireAuth, requireAdmin, (req, res) => {
+    res.json({ dir: recorder.getDir() });
+});
+
+app.put('/api/settings/recordings-dir', requireAuth, requireAdmin, (req, res) => {
+    try {
+        res.json({ ok: true, dir: recorder.setDir((req.body || {}).dir) });
+    } catch (err) {
+        res.status(400).json({ error: String(err && err.message || err) });
+    }
 });
 
 // ---- per-user favorites & recently watched ----
@@ -492,6 +582,8 @@ app.use(requireAuth, (req, res, next) => {
 
         try {
             const info = await tablo.login();
+
+            tuners.setLimit(info.tuners); // share the real tuner count with streams + recordings
 
             console.log(`[tablo4u] Connected to Tablo "${info.device}" as profile "${info.profile}" (${info.tuners} tuners).`);
 

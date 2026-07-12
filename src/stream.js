@@ -1,59 +1,68 @@
 // @ts-check
 /**
- * @file Live stream handler. Pipes a channel to the browser as MPEG-TS
- * (played client-side by mpegts.js):
+ * @file Live stream handler + shared ffmpeg arg builders. Streams a channel to
+ * the browser as MPEG-TS (played client-side by mpegts.js):
  *   - OTA: request a watch session from the device (uses a tuner) and
  *     transcode MPEG-2/AC3 → H.264/AAC.
- *   - OTT: stream the direct URL from the lineup (`ott.streamUrl`) — no watch
- *     session, no tuner used — and remux to MPEG-TS.
+ *   - OTT: request a watch session (no tuner) and remux (or transcode) to
+ *     MPEG-TS.
+ * The arg builders and getPlaylistUrl are exported so the recorder reuses the
+ * exact same pipeline, writing to a file instead of the response.
  * In MOCK mode it emits a test pattern so the player is demoable without a Tablo.
  */
 
 const { spawn } = require('child_process');
 
-var current = 0;
+const tuners = require('./tuners');
 
 /**
  * ffmpeg args for a mock test pattern (color bars + tone).
+ * @param {string} [out] output target (default the stdout pipe)
+ * @param {number} [durationSec] optional hard stop (for recordings)
  * @returns {string[]}
  */
-function mockArgs() {
+function mockArgs(out = 'pipe:1', durationSec) {
     return [
         '-re',
         '-f', 'lavfi', '-i', 'testsrc=size=960x540:rate=30',
         '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
         '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-g', '30',
         '-c:a', 'aac', '-b:a', '128k',
-        '-f', 'mpegts', 'pipe:1'
+        ...(durationSec ? ['-t', String(durationSec)] : []),
+        '-f', 'mpegts', '-flush_packets', '1', out
     ];
 }
 
 /**
  * OTA: transcode the device HLS to H.264/AAC with ~1s keyframes.
- * @param {string} playlistUrl
+ * @param {string} url
+ * @param {string} [out]
+ * @param {number} [durationSec]
  * @returns {string[]}
  */
-function otaArgs(playlistUrl) {
+function otaArgs(url, out = 'pipe:1', durationSec) {
     return [
         '-fflags', '+nobuffer+genpts',
         '-analyzeduration', '1000000',
         '-probesize', '1000000',
         '-http_persistent', '1',
-        '-i', playlistUrl,
+        '-i', url,
         '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
         '-g', '30', '-keyint_min', '30', '-sc_threshold', '0',
         '-c:a', 'aac', '-b:a', '160k',
-        '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'
+        ...(durationSec ? ['-t', String(durationSec)] : []),
+        '-f', 'mpegts', '-flush_packets', '1', out
     ];
 }
 
 /**
- * OTT copy (cheap remux) — the default. Works well for most feeds and is the
- * lightest path (no re-encode).
+ * OTT copy (cheap remux) — the default, lightest path.
  * @param {string} url
+ * @param {string} [out]
+ * @param {number} [durationSec]
  * @returns {string[]}
  */
-function ottCopyArgs(url) {
+function ottCopyArgs(url, out = 'pipe:1', durationSec) {
     return [
         '-fflags', '+genpts+discardcorrupt',
         '-analyzeduration', '2000000',
@@ -62,21 +71,22 @@ function ottCopyArgs(url) {
         '-i', url,
         '-c', 'copy',
         '-avoid_negative_ts', 'make_zero',
-        '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'
+        ...(durationSec ? ['-t', String(durationSec)] : []),
+        '-f', 'mpegts', '-flush_packets', '1', out
     ];
 }
 
 /**
- * OTT stream args. Copy (remux) by default — light and works for most setups.
- * Some FAST/OTT feeds splice ads with HLS discontinuities/timestamp resets that
- * `-c copy` passes through, which can make mpegts.js skip on certain hosts; set
- * OTT_TRANSCODE=1 to re-encode to a continuous H.264/AAC MPEG-TS instead (fixes
- * the skipping at the cost of CPU).
+ * OTT args. Copy (remux) by default; OTT_TRANSCODE=1 re-encodes to a continuous
+ * H.264/AAC MPEG-TS to smooth ad-break discontinuities that make some feeds
+ * skip on certain hosts.
  * @param {string} url
+ * @param {string} [out]
+ * @param {number} [durationSec]
  * @returns {string[]}
  */
-function ottArgs(url) {
-    if (process.env.OTT_TRANSCODE != '1') return ottCopyArgs(url);
+function ottArgs(url, out = 'pipe:1', durationSec) {
+    if (process.env.OTT_TRANSCODE != '1') return ottCopyArgs(url, out, durationSec);
 
     return [
         '-fflags', '+genpts',
@@ -88,8 +98,46 @@ function ottArgs(url) {
         '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
         '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
         '-max_muxing_queue_size', '1024',
-        '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'
+        ...(durationSec ? ['-t', String(durationSec)] : []),
+        '-f', 'mpegts', '-flush_packets', '1', out
     ];
+}
+
+/**
+ * Requests a watch session and returns a playable playlist URL.
+ * @param {import('./tablo').TabloClient} tablo
+ * @param {string} channelId
+ * @returns {Promise<string>}
+ */
+async function getPlaylistUrl(tablo, channelId) {
+    const watch = await tablo.watch(channelId);
+
+    if (!watch || !watch.playlist_url) {
+        throw new Error(watch && watch.error ? JSON.stringify(watch.error) : 'no playlist_url');
+    }
+
+    return watch.playlist_url;
+}
+
+/**
+ * Builds the ffmpeg args for a channel, resolving its watch/playlist URL.
+ * @param {object} o
+ * @param {boolean} o.mock
+ * @param {import('./tablo').TabloClient|null} o.tablo
+ * @param {string} o.channelId
+ * @param {boolean} o.isOtt
+ * @param {string} [o.out]
+ * @param {number} [o.durationSec]
+ * @returns {Promise<string[]>}
+ */
+async function buildArgs(o) {
+    if (o.mock) return mockArgs(o.out, o.durationSec);
+
+    if (!o.tablo) throw new Error('Tablo not connected');
+
+    const url = await getPlaylistUrl(o.tablo, o.channelId);
+
+    return o.isOtt ? ottArgs(url, o.out, o.durationSec) : otaArgs(url, o.out, o.durationSec);
 }
 
 /**
@@ -101,7 +149,6 @@ function ottArgs(url) {
  * @param {boolean} opts.mock
  * @param {import('./tablo').TabloClient|null} opts.tablo
  * @param {(id:string)=>('ota'|'ott'|undefined)} opts.kindOf
- * @param {number} opts.tunerCount
  * @param {(msg:string)=>void} [opts.log]
  */
 async function handleStream(req, res, opts) {
@@ -111,15 +158,12 @@ async function handleStream(req, res, opts) {
 
     const isOtt = opts.kindOf(channelId) === 'ott';
 
-    // Only OTA channels consume a physical tuner. OTT still goes through the
-    // device's /watch endpoint (that's what actually returns a playable HLS
-    // playlist — the lineup's direct streamUrl isn't reliably playable), but it
-    // doesn't occupy a tuner slot.
+    // Only OTA channels consume a physical tuner; OTT still uses /watch (that's
+    // what returns a playable playlist) but takes no tuner slot.
     const usesTuner = !isOtt && !opts.mock;
 
-    const limit = opts.tunerCount || 4;
-
-    if (usesTuner && current >= limit) {
+    // Reserve before the async watch so concurrent requests can't oversubscribe.
+    if (usesTuner && !tuners.tryReserve()) {
         res.status(503).send('All tuners are in use.');
 
         return;
@@ -128,38 +172,17 @@ async function handleStream(req, res, opts) {
     /** @type {string[]} */
     let args;
 
-    if (opts.mock) {
-        args = mockArgs();
-    } else {
-        if (!opts.tablo) {
-            res.status(502).send('Tablo not connected.');
+    try {
+        args = await buildArgs({ mock: opts.mock, tablo: opts.tablo, channelId, isOtt });
+    } catch (err) {
+        if (usesTuner) tuners.release();
 
-            return;
-        }
+        res.status(502).send('watch failed: ' + (err && err.message || err));
 
-        let watch;
-
-        try {
-            watch = await opts.tablo.watch(channelId);
-        } catch (err) {
-            res.status(502).send('watch failed: ' + (err && err.message || err));
-
-            return;
-        }
-
-        if (!watch || !watch.playlist_url) {
-            res.status(502).json(watch && watch.error ? { error: watch.error } : { error: 'no playlist_url' });
-
-            return;
-        }
-
-        // OTT is already H.264/AAC → copy; OTA (MPEG-2/AC3) → transcode.
-        args = isOtt ? ottArgs(watch.playlist_url) : otaArgs(watch.playlist_url);
+        return;
     }
 
-    if (usesTuner) current += 1;
-
-    log(`stream start ${channelId}${opts.mock ? ' (mock)' : isOtt ? ' (ott, no tuner)' : ` [${current}/${limit}]`}`);
+    log(`stream start ${channelId}${opts.mock ? ' (mock)' : isOtt ? ' (ott, no tuner)' : ` [${tuners.inUse()}/${tuners.getLimit()}]`}`);
 
     const ffmpeg = spawn('ffmpeg', args);
 
@@ -170,11 +193,11 @@ async function handleStream(req, res, opts) {
 
         done = true;
 
-        if (usesTuner) current = Math.max(0, current - 1);
+        if (usesTuner) tuners.release();
 
         ffmpeg.kill('SIGKILL');
 
-        log(`stream end ${channelId}${usesTuner ? ` [${current}/${limit}]` : ''}`);
+        log(`stream end ${channelId}${usesTuner ? ` [${tuners.inUse()}/${tuners.getLimit()}]` : ''}`);
     };
 
     res.setHeader('Content-Type', 'video/mp2t');
@@ -189,8 +212,7 @@ async function handleStream(req, res, opts) {
         cleanup();
     });
 
-    // Set STREAM_DEBUG=1 to see ffmpeg's progress (speed=, fps, drops) — useful
-    // if a stream buffers: speed below ~1x means the transcode can't keep up.
+    // Set STREAM_DEBUG=1 to see ffmpeg's progress (speed=, fps, drops).
     if (process.env.STREAM_DEBUG == '1') {
         ffmpeg.stderr.on('data', (d) => process.stderr.write('[ffmpeg] ' + d));
     } else {
@@ -204,4 +226,4 @@ async function handleStream(req, res, opts) {
     res.on('close', cleanup);
 }
 
-module.exports = { handleStream };
+module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl };

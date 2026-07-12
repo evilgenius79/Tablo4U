@@ -29,6 +29,11 @@ laptop, phone, or TV browser without being locked into the official apps.
   **picture-in-picture**. OTT channels are remuxed cheaply (already H.264) and
   **don't occupy a tuner**; OTA channels (MPEG-2/AC3) use a tuner and are
   transcoded to H.264/AAC by ffmpeg so they play in any modern browser.
+- ⏺ **DVR / recording** — record any channel to an MPEG-TS file on the server
+  (instant "● Rec" from the player), then play back, download, or delete it from
+  the **Recordings** view. Recordings and live streams share the real tuner
+  count so they can't oversubscribe the device (OTA only; OTT records without a
+  tuner). Save folder is configurable.
 - ⭐ **Favorites & recently watched** — star channels (filter to just those),
   and jump back to what you were watching — saved per user.
 - 🔎 **Search** the guide by channel or program, and click any program for a
@@ -98,6 +103,7 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 | `TABLO_SERVER_ID` | first device | Pick a specific device if you have more than one |
 | `ADMIN_PASSWORD` | random | Admin password. Set it and it **always wins** — the admin login is (re)set to it on every start. Leave unset and a random one is generated + printed on first run. |
 | `PORT` | `3400` | Web UI port |
+| `RECORDINGS_DIR` | `./recordings` | Where DVR recordings are saved (a folder on the server; also changeable in-app) |
 | `OPEN` | off | Set `OPEN=1` to disable login (LAN convenience) |
 | `MOCK` | off | Set `MOCK=1` for sample data + test-pattern stream |
 | `SESSION_SECRET` | random | Set a fixed value so sessions survive restarts |
@@ -134,6 +140,11 @@ All endpoints require a session (unless `OPEN=1`):
 | `GET` | `/api/channels` | Native channel lineup (JSON) |
 | `GET` | `/api/guide?date=YYYY-MM-DD` | Native guide airings per channel |
 | `GET` | `/api/stream/:channelId` | Live MPEG-TS stream |
+| `GET` | `/api/recordings` | List active + saved recordings, folder, tuner use |
+| `POST` | `/api/recordings/start` | `{channelId, title, minutes}` → start a recording |
+| `POST` | `/api/recordings/:id/stop` | Stop an in-flight recording |
+| `GET` | `/api/recordings/:id/file` | Play back / download a saved recording |
+| `DELETE` | `/api/recordings/:id` | Delete a recording |
 | `GET` | `/api/profile` | Current user's favorites + recently watched |
 | `PUT`/`DELETE` | `/api/favorites/:channelId` | Add/remove a favorite |
 | `GET` | `/api/users` | List users *(admin)* |
@@ -156,7 +167,9 @@ All endpoints require a session (unless `OPEN=1`):
 - [x] Rolling time window (~1h back / ~3h ahead) with Earlier/Later navigation,
       date-jump, and lazy-loaded channel rows
 - [x] Tuner count auto-detected from the device (OTT channels tuner-free)
-- [ ] DVR / recordings (pending Tablo endpoint exposure)
+- [x] DVR: record a channel to disk (instant), play back / download / delete,
+      with shared tuner accounting
+- [ ] DVR: schedule recordings from the guide (click a future program)
 - [ ] Program reminders / "watch later"
 
 ## Status
