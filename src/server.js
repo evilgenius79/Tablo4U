@@ -279,6 +279,46 @@ app.get('/api/guide', requireAuth, async (req, res) => {
     }
 });
 
+// ---- device diagnostics (admin only) ----
+// Read-only probe of candidate device endpoints, used to discover what the
+// Tablo 4th Gen exposes (e.g. per-channel signal strength — not present in the
+// cloud lineup/guide we normally use). Admin-only since the site may be public.
+app.get('/api/device/probe', requireAuth, requireAdmin, async (req, res) => {
+    if (!tablo) return res.status(502).json({ error: 'Tablo not connected' });
+
+    const paths = [
+        '/server/info', '/server/tuners', '/tuners', '/server/capabilities',
+        '/server/settings', '/settings', '/channels', '/server/channels',
+        '/guide/channels', '/server/scan', '/scan', '/server/status', '/status'
+    ];
+
+    /** @type {Record<string, any>} */
+    const out = {};
+
+    // A raw cloud channel object too, in case signal is hiding there already.
+    try {
+        const chs = await getChannels();
+        out['_cloud_channel_sample'] = chs[0] || null;
+    } catch (err) {
+        out['_cloud_channel_sample'] = { error: String(err && err.message || err) };
+    }
+
+    await Promise.all(paths.map(async (p) => {
+        try {
+            const r = await tablo.deviceReq('GET', p);
+
+            // Trim big arrays to a single sample so the response stays readable.
+            out[p] = Array.isArray(r)
+                ? { type: 'array', length: r.length, sample: r[0] }
+                : (typeof r === 'string' ? r.slice(0, 300) : r);
+        } catch (err) {
+            out[p] = { error: String(err && err.message || err) };
+        }
+    }));
+
+    res.json(out);
+});
+
 // Live player stream (MPEG-TS; played by mpegts.js in the browser).
 app.get('/api/stream/:channelId', requireAuth, (req, res) => {
     // @ts-ignore - record recently-watched for the signed-in user
