@@ -1,29 +1,29 @@
 {
-    "name": "tablo4u",
-    "version": "0.3.0",
-    "description": "A native web front-end for Tablo 4th Gen — browse the guide and watch live TV in your browser using Tablo's own JSON API.",
-    "type": "commonjs",
-    "main": "src/server.js",
-    "bin": "src/server.js",
-    "scripts": {
-        "start": "node src/server.js",
-        "mock": "MOCK=1 node src/server.js",
-        "bundle-assets": "node scripts/bundle-assets.js",
-        "build:win": "node scripts/bundle-assets.js && node build.win.js",
-        "build:linux": "node scripts/bundle-assets.js && node build.linux.js"
-    },
-    "engines": {
-        "node": ">=20"
-    },
-    "author": "",
-    "license": "ISC",
-    "dependencies": {
-        "dotenv": "^16.4.1",
-        "express": "^5.1.0",
-        "express-session": "^1.18.0"
-    },
-    "devDependencies": {
-        "@hearhellacopters/exe": "^2.1.5",
-        "@yao-pkg/pkg": "^6.12.0"
-    }
+  "name": "tablo4u",
+  "version": "0.4.0",
+  "description": "A native web front-end for Tablo 4th Gen — browse the guide and watch live TV in your browser using Tablo's own JSON API.",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "bin": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "mock": "MOCK=1 node src/server.js",
+    "bundle-assets": "node scripts/bundle-assets.js",
+    "build:win": "node scripts/bundle-assets.js && node build.win.js",
+    "build:linux": "node scripts/bundle-assets.js && node build.linux.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.1",
+    "express": "^5.1.0",
+    "express-session": "^1.18.0"
+  },
+  "devDependencies": {
+    "@hearhellacopters/exe": "^2.1.5",
+    "@yao-pkg/pkg": "^6.12.0"
+  }
 }

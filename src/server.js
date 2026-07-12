@@ -6,9 +6,8 @@
  * Env:
  *   TABLO_EMAIL / TABLO_PASSWORD   Tablo account (required unless MOCK=1)
  *   TABLO_SERVER_ID                Optional: pick a specific device
- *   ADMIN_PASSWORD                 First-run admin password (else random, printed)
+ *   ADMIN_PASSWORD                 Admin password (always wins; else random, printed)
  *   PORT                           Default 3400
- *   TUNER_COUNT                    Max concurrent streams (default 4)
  *   OPEN=1                         Disable login (LAN convenience)
  *   MOCK=1                         Serve sample data + test-pattern stream
  */
@@ -42,6 +41,9 @@ var tablo = null;
 /** channelId -> 'ota'|'ott' */
 const channelKind = new Map();
 
+/** channelId -> direct OTT stream URL (from the lineup) */
+const channelOtt = new Map();
+
 /** In-memory guide cache: date -> { at, data }. */
 const guideCache = new Map();
 
@@ -52,7 +54,14 @@ const GUIDE_TTL = 5 * 60 * 1000;
  */
 function indexKinds(channels) {
     for (const ch of channels) {
-        if (ch && ch.identifier) channelKind.set(ch.identifier, ch.kind);
+        if (!ch || !ch.identifier) continue;
+
+        channelKind.set(ch.identifier, ch.kind);
+
+        // OTT channels carry a direct stream URL — used instead of a tuner.
+        if (ch.kind === 'ott' && ch.ott && ch.ott.streamUrl) {
+            channelOtt.set(ch.identifier, ch.ott.streamUrl);
+        }
     }
 }
 
@@ -283,6 +292,8 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
         mock: MOCK,
         tablo,
         kindOf: (id) => channelKind.get(id),
+        ottUrlOf: (id) => channelOtt.get(id),
+        tunerCount: tablo ? tablo.tuners : 4,
         log: (m) => console.log('[tablo4u] ' + m)
     });
 });
@@ -351,13 +362,22 @@ app.use(requireAuth, (req, res, next) => {
 
 (async function start() {
     if (!OPEN) {
-        const seed = Auth.ensureAdmin(process.env.ADMIN_PASSWORD);
+        if (process.env.ADMIN_PASSWORD) {
+            // ADMIN_PASSWORD always wins: create the admin with it, or reset the
+            // existing admin's password to it on every start.
+            const seed = Auth.ensureAdmin(process.env.ADMIN_PASSWORD);
 
-        if (seed.created) {
-            console.log('[tablo4u] ----------------------------------------------');
-            console.log(`[tablo4u] Created admin account:  ${seed.username} / ${seed.password}`);
-            console.log('[tablo4u] (set ADMIN_PASSWORD to choose your own, or change it in the app)');
-            console.log('[tablo4u] ----------------------------------------------');
+            if (!seed.created) Auth.setPassword('admin', process.env.ADMIN_PASSWORD);
+        } else {
+            // No ADMIN_PASSWORD set: generate one on first run and print it.
+            const seed = Auth.ensureAdmin();
+
+            if (seed.created) {
+                console.log('[tablo4u] ----------------------------------------------');
+                console.log(`[tablo4u] Created admin account:  ${seed.username} / ${seed.password}`);
+                console.log('[tablo4u] (set ADMIN_PASSWORD in .env to choose your own)');
+                console.log('[tablo4u] ----------------------------------------------');
+            }
         }
     }
 
@@ -373,7 +393,7 @@ app.use(requireAuth, (req, res, next) => {
         try {
             const info = await tablo.login();
 
-            console.log(`[tablo4u] Connected to Tablo "${info.device}" as profile "${info.profile}".`);
+            console.log(`[tablo4u] Connected to Tablo "${info.device}" as profile "${info.profile}" (${info.tuners} tuners).`);
 
             await getChannels(); // warm the kind index
         } catch (err) {

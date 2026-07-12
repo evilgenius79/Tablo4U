@@ -59,7 +59,10 @@
     }
     .tick { flex: 0 0 auto; border-left: 1px solid var(--line); color: var(--muted);
         font-size: 12px; padding: 8px 0 0 6px; }
-    .row { display: flex; border-bottom: 1px solid var(--line); min-height: 64px; }
+    /* width:max-content makes the row span chan+track (chan 200px + full-day
+       track ~4320px) so the sticky channel column stays pinned across the whole
+       horizontal scroll instead of clamping to a viewport-width row box. */
+    .row { display: flex; width: max-content; border-bottom: 1px solid var(--line); min-height: 64px; }
     .chan {
         position: sticky; left: 0; z-index: 2; flex: 0 0 var(--chan-w);
         width: var(--chan-w); background: var(--panel); border-right: 1px solid var(--line);
@@ -86,7 +89,10 @@
     .prog .t { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .prog .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .prog:hover .sub { color: #dbe7f7; }
-    #nowline { position: absolute; top: 32px; bottom: 0; width: 2px; background: var(--now); z-index: 2; pointer-events: none; }
+    #pager { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 8px;
+        background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    #pager button:disabled { opacity: .4; cursor: default; }
+    #nowline { position: absolute; top: 32px; width: 2px; background: var(--now); z-index: 2; pointer-events: none; }
     #nowline::before { content: 'now'; position: absolute; top: -18px; left: -14px;
         background: var(--now); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; }
     .empty { color: var(--muted); padding: 30px; text-align: center; }
@@ -149,6 +155,11 @@
         <div class="timeaxis" id="timeaxis"></div>
         <div id="nowline" style="display:none"></div>
         <div id="rows"></div>
+    </div>
+    <div id="pager" style="display:none">
+        <button class="ghost" id="prevPage">‹ Prev</button>
+        <span id="pageInfo"></span>
+        <button class="ghost" id="nextPage">Next ›</button>
     </div>
 
     <!-- player -->
@@ -217,14 +228,19 @@
 
 <script src="/vendor/mpegts.js"></script>
 <script>
-const WINDOW_MIN = 240, PX_PER_MIN = 4;
+const DAY_MIN = 1440, PX_PER_MIN = 3;   // full-day scrollable timeline
+const PAGE_SIZE = 30;                    // channels rendered per page
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let channels = [], guide = {}, windowStart;
 let favorites = new Set(), recent = [];
-let favOnly = false, query = '';
+let favOnly = false, query = '', page = 1;
 const chById = {};
+
+function selectedDateStr() { return $('#date').value; }
+function isToday() { return selectedDateStr() === new Date().toISOString().slice(0, 10); }
+function filteredChannels() { return channels.filter(channelMatches); }
 
 function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 function chanNum(ch) { const k = ch.ota || ch.ott || {}; return (k.major != null) ? `${k.major}.${k.minor}` : ''; }
@@ -240,7 +256,7 @@ async function api(path, opts) {
 
 function buildAxis() {
     const axis = $('#timeaxis'); axis.innerHTML = '';
-    for (let m = 0; m < WINDOW_MIN; m += 30) {
+    for (let m = 0; m < DAY_MIN; m += 30) {
         const t = new Date(windowStart.getTime() + m * 60000);
         const tick = document.createElement('div');
         tick.className = 'tick'; tick.style.width = (30 * PX_PER_MIN) + 'px'; tick.textContent = fmtTime(t);
@@ -257,14 +273,39 @@ function channelMatches(ch) {
         (a.title || '').toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q));
 }
 
+function updateNowline() {
+    const nl = $('#nowline');
+    const now = Date.now();
+    const winEnd = windowStart.getTime() + DAY_MIN * 60000;
+    if (isToday() && now >= windowStart.getTime() && now <= winEnd) {
+        nl.style.left = `calc(var(--chan-w) + ${(now - windowStart.getTime()) / 60000 * PX_PER_MIN}px)`;
+        nl.style.height = ($('#rows').offsetHeight || 0) + 'px';   // span all rows, not just the viewport
+        nl.style.display = 'block';
+    } else nl.style.display = 'none';
+}
+
+function renderPager(total, pages) {
+    const bar = $('#pager');
+    if (pages <= 1) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    $('#pageInfo').textContent = `Page ${page} of ${pages} · ${total} channels`;
+    $('#prevPage').disabled = page <= 1;
+    $('#nextPage').disabled = page >= pages;
+}
+
 function render() {
     buildAxis();
     const rows = $('#rows'); rows.innerHTML = '';
-    const winEnd = new Date(windowStart.getTime() + WINDOW_MIN * 60000);
+    const winEnd = new Date(windowStart.getTime() + DAY_MIN * 60000);
     const now = Date.now();
-    const list = channels.filter(channelMatches);
 
-    if (!list.length) { rows.innerHTML = '<div class="empty">No channels match.</div>'; $('#nowline').style.display = 'none'; return; }
+    const all = filteredChannels();
+    const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+    if (page > pages) page = pages;
+    const list = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    renderPager(all.length, pages);
+
+    if (!all.length) { rows.innerHTML = '<div class="empty">No channels match.</div>'; $('#nowline').style.display = 'none'; return; }
 
     for (const ch of list) {
         const row = document.createElement('div'); row.className = 'row';
@@ -279,13 +320,13 @@ function render() {
         c.querySelector('.star').onclick = (e) => { e.stopPropagation(); toggleFav(ch); };
         row.appendChild(c);
 
-        const track = document.createElement('div'); track.className = 'track'; track.style.width = (WINDOW_MIN * PX_PER_MIN) + 'px';
+        const track = document.createElement('div'); track.className = 'track'; track.style.width = (DAY_MIN * PX_PER_MIN) + 'px';
         for (const a of (guide[ch.identifier] || [])) {
             const start = new Date(a.datetime);
             const end = new Date(start.getTime() + (a.duration || 1800) * 1000);
             if (end <= windowStart || start >= winEnd) continue;
             const left = Math.max(0, (start - windowStart) / 60000) * PX_PER_MIN;
-            const right = Math.min(WINDOW_MIN, (end - windowStart) / 60000) * PX_PER_MIN;
+            const right = Math.min(DAY_MIN, (end - windowStart) / 60000) * PX_PER_MIN;
             const el = document.createElement('div');
             el.className = 'prog' + (start.getTime() <= now && now < end.getTime() ? ' live' : '');
             el.style.left = left + 'px'; el.style.width = Math.max(24, right - left - 4) + 'px';
@@ -297,16 +338,25 @@ function render() {
         row.appendChild(track); rows.appendChild(row);
     }
 
-    const nl = $('#nowline');
-    if (now >= windowStart.getTime() && now <= winEnd.getTime()) {
-        nl.style.left = `calc(var(--chan-w) + ${(now - windowStart.getTime()) / 60000 * PX_PER_MIN}px)`;
-        nl.style.display = 'block';
-    } else nl.style.display = 'none';
+    updateNowline();
+}
+
+function computeWindow() {
+    // Start the timeline at local midnight of the selected date, so the whole
+    // day is scrollable and picking a date jumps to it.
+    windowStart = new Date(selectedDateStr() + 'T00:00:00');
+}
+
+function scrollToNow() {
+    if (!isToday()) { $('#grid').scrollLeft = 0; return; }
+    const off = (Date.now() - windowStart.getTime()) / 60000 * PX_PER_MIN;
+    $('#grid').scrollLeft = Math.max(0, off - 140);
 }
 
 async function load() {
     try {
-        const date = $('#date').value;
+        const date = selectedDateStr();
+        computeWindow();
         $('#status').textContent = 'Loading guide…';
         const [chs, g, prof] = await Promise.all([
             api('/api/channels'), api('/api/guide?date=' + date), api('/api/profile').catch(()=>({favorites:[],recent:[]}))
@@ -317,6 +367,7 @@ async function load() {
         favorites = new Set((prof && prof.favorites) || []);
         recent = (prof && prof.recent) || [];
         render();
+        scrollToNow();
         $('#status').textContent = `${channels.length} channels`;
     } catch (e) {
         $('#status').textContent = 'Error';
@@ -370,7 +421,8 @@ function watchChannel(ch, airing) {
         ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…' : 'Starting stream…';
     player = mpegts.createPlayer(
         { type: 'mpegts', isLive: true, url: '/api/stream/' + encodeURIComponent(ch.identifier) },
-        { lazyLoad: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 2.5, liveBufferLatencyMinRemain: 0.4, stashInitialSize: 1024 * 128, autoCleanupSourceBuffer: true }
+        // Gentle latency chasing — aggressive chasing made OTT feeds skip/break up.
+        { lazyLoad: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 6.0, liveBufferLatencyMinRemain: 1.0, autoCleanupSourceBuffer: true }
     );
     player.attachMediaElement(video);
     player.on(mpegts.Events.ERROR, (t, d) => { $('#pNote').textContent = 'Stream error: ' + t + (d ? ' (' + d + ')' : ''); });
@@ -407,18 +459,21 @@ $('#dClose').onclick = () => $('#detailModal').classList.remove('open');
 
 // ---- search / filters ----
 let searchTimer;
-$('#search').oninput = (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = e.target.value.trim(); render(); }, 180); };
-$('#favFilter').onclick = () => { favOnly = !favOnly; $('#favFilter').classList.toggle('on', favOnly); render(); };
+$('#search').oninput = (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = e.target.value.trim(); page = 1; render(); }, 180); };
+$('#favFilter').onclick = () => { favOnly = !favOnly; $('#favFilter').classList.toggle('on', favOnly); page = 1; render(); };
 
 // close overlays on backdrop click / Escape
 document.querySelectorAll('.overlay').forEach(o => o.onclick = (e) => { if (e.target === o) { o.classList.remove('open'); if (o.id === 'player') destroyPlayer(); } });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach(o => { o.classList.remove('open'); if (o.id === 'player') destroyPlayer(); }); });
 
-$('#date').onchange = load;
-$('#today').onclick = () => { setToday(); load(); };
+$('#date').onchange = () => { page = 1; load(); };
+$('#today').onclick = () => { setToday(); page = 1; load(); };
 $('#logout').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
+$('#prevPage').onclick = () => { if (page > 1) { page--; render(); $('#grid').scrollTop = 0; } };
+$('#nextPage').onclick = () => { page++; render(); $('#grid').scrollTop = 0; };
 function setToday() { $('#date').value = new Date().toISOString().slice(0, 10); }
-function initWindow() { const d = new Date(); d.setMinutes(d.getMinutes() < 30 ? 0 : 30, 0, 0); windowStart = new Date(d.getTime() - 30 * 60000); }
+// keep the now-line moving as time passes
+setInterval(() => { if (windowStart) updateNowline(); }, 30000);
 
 // ---- theme ----
 const THEME_KEY = 'tablo4u-theme';
@@ -466,7 +521,7 @@ $('#uAdd').onclick = async () => {
     const me = await fetch('/api/me').then(r => r.json()).catch(() => ({}));
     if (!me.open) $('#logout').style.display = '';
     if (me.user && me.user.role === 'admin') $('#usersBtn').style.display = '';
-    setToday(); initWindow(); await load();
+    setToday(); await load();
 })();
 </script>
 </body>

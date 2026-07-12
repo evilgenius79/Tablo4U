@@ -1,16 +1,15 @@
 // @ts-check
 /**
- * @file Live stream handler. Fetches a Tablo watch session, then pipes the
- * stream to the browser as MPEG-TS (played client-side by mpegts.js):
- *   - OTT channels are usually already H.264/AAC → ffmpeg `-c copy` (cheap remux)
- *   - OTA channels are MPEG-2/AC3 → ffmpeg transcodes to H.264/AAC
+ * @file Live stream handler. Pipes a channel to the browser as MPEG-TS
+ * (played client-side by mpegts.js):
+ *   - OTA: request a watch session from the device (uses a tuner) and
+ *     transcode MPEG-2/AC3 → H.264/AAC.
+ *   - OTT: stream the direct URL from the lineup (`ott.streamUrl`) — no watch
+ *     session, no tuner used — and remux to MPEG-TS.
  * In MOCK mode it emits a test pattern so the player is demoable without a Tablo.
  */
 
 const { spawn } = require('child_process');
-
-/** Max concurrent streams (Tablo tuners). */
-const TUNER_COUNT = parseInt(process.env.TUNER_COUNT || '4', 10);
 
 var current = 0;
 
@@ -30,32 +29,43 @@ function mockArgs() {
 }
 
 /**
- * ffmpeg args for a real Tablo stream.
+ * OTA: transcode the device HLS to H.264/AAC with ~1s keyframes.
  * @param {string} playlistUrl
- * @param {boolean} transcode - true for OTA (MPEG-2/AC3), false to copy
  * @returns {string[]}
  */
-function tabloArgs(playlistUrl, transcode) {
-    const input = [
+function otaArgs(playlistUrl) {
+    return [
         '-fflags', '+nobuffer+genpts',
         '-analyzeduration', '1000000',
         '-probesize', '1000000',
         '-http_persistent', '1',
-        '-i', playlistUrl
+        '-i', playlistUrl,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+        '-g', '30', '-keyint_min', '30', '-sc_threshold', '0',
+        '-c:a', 'aac', '-b:a', '160k',
+        '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'
     ];
+}
 
-    // Frequent keyframes (~1s) so mpegts.js can start and recover quickly
-    // instead of waiting up to a full GOP (~8s) — the main cause of buffering.
-    const output = transcode
-        ? [
-            '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
-            '-g', '30', '-keyint_min', '30', '-sc_threshold', '0',
-            '-c:a', 'aac', '-b:a', '160k'
-        ]
-        : ['-c', 'copy'];
-
-    // Flush packets to the pipe immediately for low-latency live delivery.
-    return [...input, ...output, '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'];
+/**
+ * OTT: remux the direct stream to MPEG-TS. Regenerate timestamps and drop
+ * corrupt packets to avoid the skipping seen on some OTT feeds; fall back to a
+ * transcode only if the source isn't H.264 (handled by libx264 below when
+ * copy would fail is out of scope — copy is the cheap common case).
+ * @param {string} url
+ * @returns {string[]}
+ */
+function ottArgs(url) {
+    return [
+        '-fflags', '+genpts+discardcorrupt',
+        '-analyzeduration', '2000000',
+        '-probesize', '2000000',
+        '-http_persistent', '1',
+        '-i', url,
+        '-c', 'copy',
+        '-avoid_negative_ts', 'make_zero',
+        '-f', 'mpegts', '-flush_packets', '1', 'pipe:1'
+    ];
 }
 
 /**
@@ -67,6 +77,8 @@ function tabloArgs(playlistUrl, transcode) {
  * @param {boolean} opts.mock
  * @param {import('./tablo').TabloClient|null} opts.tablo
  * @param {(id:string)=>('ota'|'ott'|undefined)} opts.kindOf
+ * @param {(id:string)=>(string|undefined)} opts.ottUrlOf
+ * @param {number} opts.tunerCount
  * @param {(msg:string)=>void} [opts.log]
  */
 async function handleStream(req, res, opts) {
@@ -74,7 +86,14 @@ async function handleStream(req, res, opts) {
 
     const channelId = req.params.channelId;
 
-    if (current >= TUNER_COUNT) {
+    const isOtt = opts.kindOf(channelId) === 'ott';
+
+    // OTT streams straight from the device's own URL and does not occupy a tuner.
+    const usesTuner = !isOtt && !opts.mock;
+
+    const limit = opts.tunerCount || 4;
+
+    if (usesTuner && current >= limit) {
         res.status(503).send('All tuners are in use.');
 
         return;
@@ -85,6 +104,16 @@ async function handleStream(req, res, opts) {
 
     if (opts.mock) {
         args = mockArgs();
+    } else if (isOtt) {
+        const url = opts.ottUrlOf(channelId);
+
+        if (!url) {
+            res.status(502).json({ error: 'no OTT stream URL for channel' });
+
+            return;
+        }
+
+        args = ottArgs(url);
     } else {
         if (!opts.tablo) {
             res.status(502).send('Tablo not connected.');
@@ -108,14 +137,12 @@ async function handleStream(req, res, opts) {
             return;
         }
 
-        const transcode = opts.kindOf(channelId) !== 'ott'; // default to transcode unless known-OTT
-
-        args = tabloArgs(watch.playlist_url, transcode);
+        args = otaArgs(watch.playlist_url);
     }
 
-    current += 1;
+    if (usesTuner) current += 1;
 
-    log(`[${current}/${TUNER_COUNT}] stream start ${channelId}${opts.mock ? ' (mock)' : ''}`);
+    log(`stream start ${channelId}${opts.mock ? ' (mock)' : isOtt ? ' (ott, no tuner)' : ` [${current}/${limit}]`}`);
 
     const ffmpeg = spawn('ffmpeg', args);
 
@@ -126,11 +153,11 @@ async function handleStream(req, res, opts) {
 
         done = true;
 
-        current = Math.max(0, current - 1);
+        if (usesTuner) current = Math.max(0, current - 1);
 
         ffmpeg.kill('SIGKILL');
 
-        log(`[${current}/${TUNER_COUNT}] stream end ${channelId}`);
+        log(`stream end ${channelId}${usesTuner ? ` [${current}/${limit}]` : ''}`);
     };
 
     res.setHeader('Content-Type', 'video/mp2t');
@@ -160,4 +187,4 @@ async function handleStream(req, res, opts) {
     res.on('close', cleanup);
 }
 
-module.exports = { handleStream, TUNER_COUNT };
+module.exports = { handleStream };

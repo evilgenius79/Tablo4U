@@ -20,14 +20,16 @@ laptop, phone, or TV browser without being locked into the official apps.
 
 ## Features
 
-- 📺 **Native EPG guide** — a real timeline grid (now-line, live indicators,
-  date picker, **channel logos**) built straight from Tablo's JSON guide data.
-  No XMLTV.
+- 📺 **Native EPG guide** — a full-day scrollable timeline grid (live now-line,
+  live indicators, date picker that jumps to any day, **channel logos**, and
+  **pagination** so 100+ channel lineups stay fast) built straight from Tablo's
+  JSON guide data. No XMLTV.
 - ▶️ **In-browser live player** — plays streams via
   [mpegts.js](https://github.com/xqq/mpegts.js) (bundled), with
-  **picture-in-picture**. OTT channels (H.264) are remuxed cheaply; OTA
-  channels (MPEG-2/AC3) are transcoded to H.264/AAC by ffmpeg so they play in
-  any modern browser.
+  **picture-in-picture**. OTT channels stream from the device's direct URL and
+  are remuxed cheaply (and **don't occupy a tuner**); OTA channels (MPEG-2/AC3)
+  request a watch session (one tuner) and are transcoded to H.264/AAC by ffmpeg
+  so they play in any modern browser.
 - ⭐ **Favorites & recently watched** — star channels (filter to just those),
   and jump back to what you were watching — saved per user.
 - 🔎 **Search** the guide by channel or program, and click any program for a
@@ -95,12 +97,15 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 |---|---|---|
 | `TABLO_EMAIL` / `TABLO_PASSWORD` | — | Your Tablo account (required unless `MOCK=1`) |
 | `TABLO_SERVER_ID` | first device | Pick a specific device if you have more than one |
-| `ADMIN_PASSWORD` | random | First-run admin password (printed if generated) |
+| `ADMIN_PASSWORD` | random | Admin password. Set it and it **always wins** — the admin login is (re)set to it on every start. Leave unset and a random one is generated + printed on first run. |
 | `PORT` | `3400` | Web UI port |
-| `TUNER_COUNT` | `4` | Max concurrent streams |
 | `OPEN` | off | Set `OPEN=1` to disable login (LAN convenience) |
 | `MOCK` | off | Set `MOCK=1` for sample data + test-pattern stream |
 | `SESSION_SECRET` | random | Set a fixed value so sessions survive restarts |
+
+> The **tuner count is read from the device** after login (`/server/info`), not
+> from config — so it's always correct and there's no `TUNER_COUNT` to set.
+> Only OTA channels use a tuner; OTT channels stream directly and don't.
 
 ## How it works
 
@@ -113,9 +118,10 @@ Browser ──HTTP──► Tablo4U server ──HTTPS──► Tablo cloud (log
 
 - **Auth & data** come from Tablo's cloud API (`login`, `account`, guide
   `airings`, channel lineup) — all JSON, served through to the browser as-is.
-- **Streams**: the server asks the Tablo device for a watch session, then pipes
-  it through ffmpeg to the browser as MPEG-TS. OTT (already H.264) uses
-  `-c copy`; OTA (MPEG-2/AC3) transcodes to H.264/AAC.
+- **Streams**: OTA channels ask the Tablo device for a watch session (one
+  tuner) and transcode MPEG-2/AC3 → H.264/AAC. OTT channels use the direct
+  `streamUrl` from the lineup — no watch session, no tuner — and are remuxed
+  with `-c copy`. Both are piped to the browser as MPEG-TS.
 
 ## API
 
@@ -148,6 +154,8 @@ All endpoints require a session (unless `OPEN=1`):
 - [x] Favorites and "recently watched" per user
 - [x] Search across the guide
 - [x] Picture-in-picture and mobile-optimized layout
+- [x] Full-day scrollable timeline, date-jump navigation, and pagination
+- [x] Tuner count auto-detected from the device (OTT channels tuner-free)
 - [ ] DVR / recordings (pending Tablo endpoint exposure)
 - [ ] Program reminders / "watch later"
 

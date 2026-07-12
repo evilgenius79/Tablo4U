@@ -117,6 +117,29 @@ const Auth = {
     },
 
     /**
+     * Resets a user's password (used to keep admin in sync with ADMIN_PASSWORD).
+     *
+     * @param {string} username
+     * @param {string} password
+     * @returns {boolean} whether the user existed
+     */
+    setPassword(username, password) {
+        const users = load();
+
+        const u = users.find(x => x.username === String(username || '').trim().toLowerCase());
+
+        if (!u) return false;
+
+        u.salt = crypto.randomBytes(16).toString('hex');
+
+        u.hash = hashPw(password, u.salt);
+
+        save(users);
+
+        return true;
+    },
+
+    /**
      * @param {string} username
      * @param {string} password
      * @returns {User|null}

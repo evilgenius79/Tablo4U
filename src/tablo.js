@@ -79,6 +79,9 @@ class TabloClient {
         /** @type {any} */
         this.profile = null;
 
+        /** Real tuner count, read from the device after login. */
+        this.tuners = 4;
+
         this.uuid = crypto.randomUUID();
 
         this.ready = false;
@@ -210,9 +213,31 @@ class TabloClient {
 
         this.lighthouse = select.token;
 
+        // Tuner count comes from the device itself, not config — the .env value
+        // could be wrong.
+        await this.getServerInfo();
+
         this.ready = true;
 
-        return { device: this.device.name, profile: this.profile.name };
+        return { device: this.device.name, profile: this.profile.name, tuners: this.tuners };
+    }
+
+    /**
+     * Reads /server/info from the device to get the real tuner count.
+     * @returns {Promise<any>}
+     */
+    async getServerInfo() {
+        try {
+            const info = await this.deviceReq('GET', '/server/info');
+
+            if (info && info.model && info.model.tuners) {
+                this.tuners = info.model.tuners;
+            }
+
+            return info;
+        } catch {
+            return null;
+        }
     }
 
     /**
