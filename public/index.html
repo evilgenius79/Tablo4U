@@ -9,20 +9,18 @@
     :root {
         --bg: #0f1216; --panel: #171b21; --panel2: #1e242c; --line: #2a323c;
         --text: #e7ecf2; --muted: #93a1b0; --accent: #4aa3ff; --accent2: #2b6fd4;
-        --now: #ff5470; --live: #35c47b;
+        --now: #ff5470; --live: #35c47b; --star: #ffce54;
     }
-    /* explicit light choice */
     :root[data-theme="light"] {
         --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef2f6; --line: #d8e0e8;
         --text: #16202b; --muted: #5c6b7a; --accent: #1e6fe0; --accent2: #1656b0;
-        --now: #e03357; --live: #1f9d5f;
+        --now: #e03357; --live: #1f9d5f; --star: #e0a000;
     }
-    /* auto: follow the OS when no explicit choice is set */
     @media (prefers-color-scheme: light) {
         :root:not([data-theme]) {
             --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef2f6; --line: #d8e0e8;
             --text: #16202b; --muted: #5c6b7a; --accent: #1e6fe0; --accent2: #1656b0;
-            --now: #e03357; --live: #1f9d5f;
+            --now: #e03357; --live: #1f9d5f; --star: #e0a000;
         }
     }
     * { box-sizing: border-box; }
@@ -33,22 +31,24 @@
         display: flex; flex-direction: column;
     }
     header {
-        display: flex; align-items: center; gap: 16px; padding: 12px 18px;
+        display: flex; align-items: center; gap: 10px; padding: 10px 16px; flex-wrap: wrap;
         background: var(--panel); border-bottom: 1px solid var(--line);
     }
     header h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
     header h1 span { color: var(--accent); }
     .spacer { flex: 1; }
     header .status { color: var(--muted); font-size: 13px; }
-    header input[type=date] {
+    header input[type=date], header input[type=search] {
         background: var(--panel2); color: var(--text); border: 1px solid var(--line);
         border-radius: 8px; padding: 6px 10px; font: inherit;
     }
+    header input[type=search] { min-width: 170px; }
     button {
         background: var(--accent2); color: #fff; border: 0; border-radius: 8px;
-        padding: 7px 12px; font: inherit; cursor: pointer;
+        padding: 7px 12px; font: inherit; cursor: pointer; white-space: nowrap;
     }
     button.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+    button.on { background: var(--accent); color: #fff; }
     button:hover { filter: brightness(1.08); }
 
     #grid { flex: 1; overflow: auto; position: relative; }
@@ -63,13 +63,18 @@
     .chan {
         position: sticky; left: 0; z-index: 2; flex: 0 0 var(--chan-w);
         width: var(--chan-w); background: var(--panel); border-right: 1px solid var(--line);
-        display: flex; flex-direction: column; justify-content: center; padding: 8px 12px;
-        cursor: pointer;
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px;
     }
-    .chan:hover { background: var(--panel2); }
-    .chan .num { color: var(--accent); font-weight: 700; font-size: 13px; }
-    .chan .name { font-weight: 600; }
-    .chan .net { color: var(--muted); font-size: 12px; }
+    .chan .logo { width: 40px; height: 30px; object-fit: contain; border-radius: 4px; flex: 0 0 auto; background: var(--panel2); }
+    .chan .meta { flex: 1; min-width: 0; cursor: pointer; }
+    .chan .meta:hover .name { color: var(--accent); }
+    .chan .num { color: var(--accent); font-weight: 700; font-size: 12px; }
+    .chan .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chan .net { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .star { flex: 0 0 auto; cursor: pointer; font-size: 17px; color: var(--muted); background: none;
+        border: 0; padding: 2px; line-height: 1; opacity: .55; }
+    .star:hover { opacity: 1; }
+    .star.fav { color: var(--star); opacity: 1; }
     .track { position: relative; flex: 1; }
     .prog {
         position: absolute; top: 6px; bottom: 6px; background: var(--panel2);
@@ -78,59 +83,81 @@
     }
     .prog:hover { background: var(--accent2); color: #fff; border-color: var(--accent); }
     .prog.live { border-left: 3px solid var(--live); }
-    .prog .t { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden;
-        text-overflow: ellipsis; }
-    .prog .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
-        text-overflow: ellipsis; }
+    .prog .t { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .prog .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .prog:hover .sub { color: #dbe7f7; }
-    #nowline { position: absolute; top: 32px; bottom: 0; width: 2px; background: var(--now);
-        z-index: 2; pointer-events: none; }
+    #nowline { position: absolute; top: 32px; bottom: 0; width: 2px; background: var(--now); z-index: 2; pointer-events: none; }
     #nowline::before { content: 'now'; position: absolute; top: -18px; left: -14px;
         background: var(--now); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; }
+    .empty { color: var(--muted); padding: 30px; text-align: center; }
 
-    #player, #usersModal { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
-        align-items: center; justify-content: center; z-index: 10; }
-    #player.open, #usersModal.open { display: flex; }
-    #uTable td, #uTable th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-    #uTable .role { color: var(--muted); }
-    .del { background: transparent; color: var(--now); border: 1px solid var(--line); }
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
+        align-items: center; justify-content: center; z-index: 10; padding: 12px; }
+    .overlay.open { display: flex; }
     .pcard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-        width: min(880px, 92vw); overflow: hidden; }
-    .phead { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
-        border-bottom: 1px solid var(--line); }
+        width: min(880px, 96vw); max-height: 92vh; overflow: auto; }
+    .phead { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line);
+        position: sticky; top: 0; background: var(--panel); }
     .phead .title { font-weight: 700; }
     .phead .spacer { flex: 1; }
     .pbody { padding: 16px; }
     .pbody video { width: 100%; border-radius: 10px; background: #000; aspect-ratio: 16/9; }
     .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
-    .banner { background: #3a2a12; color: #ffcf8f; padding: 8px 18px; font-size: 13px;
-        border-bottom: 1px solid var(--line); }
-    @media (prefers-color-scheme: light) { .banner { background: #fff4e0; color: #8a5a12; } }
+    #uTable td, #uTable th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    #uTable .role { color: var(--muted); }
+    .del { background: transparent; color: var(--now); border: 1px solid var(--line); }
+    /* detail modal */
+    .detail { display: flex; gap: 16px; flex-wrap: wrap; }
+    .detail img { width: 260px; max-width: 100%; border-radius: 10px; background: var(--panel2); aspect-ratio: 16/9; object-fit: cover; }
+    .detail .info { flex: 1; min-width: 220px; }
+    .detail h2 { margin: 0 0 4px; font-size: 20px; }
+    .detail .when { color: var(--accent); font-size: 13px; margin-bottom: 8px; }
+    .detail .desc { color: var(--text); }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+    .chip { background: var(--panel2); border: 1px solid var(--line); color: var(--muted);
+        border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+    .recent-list { display: flex; flex-direction: column; gap: 6px; }
+    .recent-item { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line);
+        border-radius: 10px; cursor: pointer; }
+    .recent-item:hover { background: var(--panel2); }
+    .recent-item img { width: 44px; height: 30px; object-fit: contain; border-radius: 4px; }
+
+    @media (max-width: 640px) {
+        body { --chan-w: 132px !important; }
+        header { gap: 8px; }
+        header input[type=search] { min-width: 120px; flex: 1; }
+        .chan .logo { width: 30px; height: 24px; }
+        .detail img { width: 100%; }
+    }
 </style>
 </head>
-<body style="--chan-w:180px; --tick-w:120px;">
+<body style="--chan-w:200px;">
     <header>
         <h1>Tablo<span>4U</span></h1>
         <input type="date" id="date">
         <button class="ghost" id="today">Today</button>
+        <input type="search" id="search" placeholder="Search guide…">
+        <button class="ghost" id="favFilter" title="Show favorites only">★ Favorites</button>
+        <button class="ghost" id="recentBtn">Recent</button>
         <div class="spacer"></div>
         <div class="status" id="status">Loading…</div>
         <button class="ghost" id="themeBtn" title="Theme">🌓 Auto</button>
         <button class="ghost" id="usersBtn" style="display:none">Users</button>
         <button class="ghost" id="logout" style="display:none">Log out</button>
     </header>
-    <div class="banner" id="banner" style="display:none"></div>
     <div id="grid">
         <div class="timeaxis" id="timeaxis"></div>
         <div id="nowline" style="display:none"></div>
         <div id="rows"></div>
     </div>
 
-    <div id="player">
+    <!-- player -->
+    <div id="player" class="overlay">
         <div class="pcard">
             <div class="phead">
                 <div class="title" id="pTitle">—</div>
                 <div class="spacer"></div>
+                <button class="ghost" id="pipBtn" title="Picture-in-picture">⧉ PiP</button>
                 <button class="ghost" id="pClose">Close</button>
             </div>
             <div class="pbody">
@@ -140,7 +167,33 @@
         </div>
     </div>
 
-    <div id="usersModal">
+    <!-- program detail -->
+    <div id="detailModal" class="overlay">
+        <div class="pcard">
+            <div class="phead">
+                <div class="title">Program</div>
+                <div class="spacer"></div>
+                <button id="dWatch">▶ Watch</button>
+                <button class="ghost" id="dClose">Close</button>
+            </div>
+            <div class="pbody"><div class="detail" id="detailBody"></div></div>
+        </div>
+    </div>
+
+    <!-- recently watched -->
+    <div id="recentModal" class="overlay">
+        <div class="pcard">
+            <div class="phead">
+                <div class="title">Recently watched</div>
+                <div class="spacer"></div>
+                <button class="ghost" id="rClose">Close</button>
+            </div>
+            <div class="pbody"><div class="recent-list" id="recentList"></div></div>
+        </div>
+    </div>
+
+    <!-- users (admin) -->
+    <div id="usersModal" class="overlay">
         <div class="pcard">
             <div class="phead">
                 <div class="title">Users</div>
@@ -164,67 +217,69 @@
 
 <script src="/vendor/mpegts.js"></script>
 <script>
-const WINDOW_MIN = 240;         // visible span
-const PX_PER_MIN = 4;           // 120px per 30 min
+const WINDOW_MIN = 240, PX_PER_MIN = 4;
 const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-let channels = [];
-let guide = {};
-let windowStart;
+let channels = [], guide = {}, windowStart;
+let favorites = new Set(), recent = [];
+let favOnly = false, query = '';
+const chById = {};
 
-function fmtTime(d) {
-    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-function chanNum(ch) {
-    const k = ch.ota || ch.ott || {};
-    return (k.major != null) ? `${k.major}.${k.minor}` : '';
-}
-function chanNet(ch) {
-    const k = ch.ota || ch.ott || {};
-    return k.network || ch.name || '';
-}
+function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function chanNum(ch) { const k = ch.ota || ch.ott || {}; return (k.major != null) ? `${k.major}.${k.minor}` : ''; }
+function chanNet(ch) { const k = ch.ota || ch.ott || {}; return k.network || ch.name || ''; }
+function chanLogo(ch) { const l = (ch.logos || []).find(x => x.kind === 'lightLarge') || (ch.logos || [])[0]; return l && l.url; }
 
-async function api(path) {
-    const r = await fetch(path);
+async function api(path, opts) {
+    const r = await fetch(path, opts);
     if (r.status === 401) { location.href = '/login'; return null; }
     if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.status);
     return r.json();
 }
 
 function buildAxis() {
-    const axis = $('#timeaxis');
-    axis.innerHTML = '';
+    const axis = $('#timeaxis'); axis.innerHTML = '';
     for (let m = 0; m < WINDOW_MIN; m += 30) {
         const t = new Date(windowStart.getTime() + m * 60000);
         const tick = document.createElement('div');
-        tick.className = 'tick';
-        tick.style.width = (30 * PX_PER_MIN) + 'px';
-        tick.textContent = fmtTime(t);
+        tick.className = 'tick'; tick.style.width = (30 * PX_PER_MIN) + 'px'; tick.textContent = fmtTime(t);
         axis.appendChild(tick);
     }
 }
 
+function channelMatches(ch) {
+    if (favOnly && !favorites.has(ch.identifier)) return false;
+    if (!query) return true;
+    const q = query.toLowerCase();
+    if ((ch.name || '').toLowerCase().includes(q) || chanNet(ch).toLowerCase().includes(q) || chanNum(ch).includes(q)) return true;
+    return (guide[ch.identifier] || []).some(a =>
+        (a.title || '').toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q));
+}
+
 function render() {
     buildAxis();
-    const rows = $('#rows');
-    rows.innerHTML = '';
+    const rows = $('#rows'); rows.innerHTML = '';
     const winEnd = new Date(windowStart.getTime() + WINDOW_MIN * 60000);
     const now = Date.now();
+    const list = channels.filter(channelMatches);
 
-    for (const ch of channels) {
-        const row = document.createElement('div');
-        row.className = 'row';
+    if (!list.length) { rows.innerHTML = '<div class="empty">No channels match.</div>'; $('#nowline').style.display = 'none'; return; }
 
-        const c = document.createElement('div');
-        c.className = 'chan';
-        c.innerHTML = `<div class="num">${chanNum(ch)}</div><div class="name">${ch.name || ''}</div><div class="net">${chanNet(ch)}</div>`;
-        c.onclick = () => watchChannel(ch);
+    for (const ch of list) {
+        const row = document.createElement('div'); row.className = 'row';
+        const c = document.createElement('div'); c.className = 'chan';
+        const logoUrl = chanLogo(ch);
+        const isFav = favorites.has(ch.identifier);
+        c.innerHTML =
+            (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.style.visibility='hidden'">` : '<div class="logo"></div>')
+            + `<div class="meta"><div class="num">${esc(chanNum(ch))}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
+            + `<button class="star ${isFav ? 'fav' : ''}" title="Favorite">${isFav ? '★' : '☆'}</button>`;
+        c.querySelector('.meta').onclick = () => watchChannel(ch);
+        c.querySelector('.star').onclick = (e) => { e.stopPropagation(); toggleFav(ch); };
         row.appendChild(c);
 
-        const track = document.createElement('div');
-        track.className = 'track';
-        track.style.width = (WINDOW_MIN * PX_PER_MIN) + 'px';
-
+        const track = document.createElement('div'); track.className = 'track'; track.style.width = (WINDOW_MIN * PX_PER_MIN) + 'px';
         for (const a of (guide[ch.identifier] || [])) {
             const start = new Date(a.datetime);
             const end = new Date(start.getTime() + (a.duration || 1800) * 1000);
@@ -233,143 +288,167 @@ function render() {
             const right = Math.min(WINDOW_MIN, (end - windowStart) / 60000) * PX_PER_MIN;
             const el = document.createElement('div');
             el.className = 'prog' + (start.getTime() <= now && now < end.getTime() ? ' live' : '');
-            el.style.left = left + 'px';
-            el.style.width = Math.max(24, right - left - 4) + 'px';
-            el.innerHTML = `<div class="t">${a.title || (a.show && a.show.title) || 'Program'}</div>`
-                + `<div class="sub">${fmtTime(start)} · ${a.description || ''}</div>`;
-            el.title = (a.title || '') + '\n' + (a.description || '');
-            el.onclick = () => watchChannel(ch, a);
+            el.style.left = left + 'px'; el.style.width = Math.max(24, right - left - 4) + 'px';
+            el.innerHTML = `<div class="t">${esc(a.title || (a.show && a.show.title) || 'Program')}</div>`
+                + `<div class="sub">${fmtTime(start)}${a.description ? ' · ' + esc(a.description) : ''}</div>`;
+            el.onclick = () => showDetail(ch, a);
             track.appendChild(el);
         }
-        row.appendChild(track);
-        rows.appendChild(row);
+        row.appendChild(track); rows.appendChild(row);
     }
 
-    // now line
     const nl = $('#nowline');
     if (now >= windowStart.getTime() && now <= winEnd.getTime()) {
-        const off = (now - windowStart.getTime()) / 60000 * PX_PER_MIN;
-        nl.style.left = `calc(var(--chan-w) + ${off}px)`;
+        nl.style.left = `calc(var(--chan-w) + ${(now - windowStart.getTime()) / 60000 * PX_PER_MIN}px)`;
         nl.style.display = 'block';
-    } else {
-        nl.style.display = 'none';
-    }
+    } else nl.style.display = 'none';
 }
 
 async function load() {
     try {
         const date = $('#date').value;
         $('#status').textContent = 'Loading guide…';
-        const [chs, g] = await Promise.all([ api('/api/channels'), api('/api/guide?date=' + date) ]);
+        const [chs, g, prof] = await Promise.all([
+            api('/api/channels'), api('/api/guide?date=' + date), api('/api/profile').catch(()=>({favorites:[],recent:[]}))
+        ]);
         if (!chs) return;
-        channels = chs;
-        guide = (g && g.guide) || {};
+        channels = chs; guide = (g && g.guide) || {};
+        for (const ch of channels) chById[ch.identifier] = ch;
+        favorites = new Set((prof && prof.favorites) || []);
+        recent = (prof && prof.recent) || [];
         render();
         $('#status').textContent = `${channels.length} channels`;
     } catch (e) {
         $('#status').textContent = 'Error';
-        showBanner('Could not load from Tablo: ' + e.message);
+        alert('Could not load from Tablo: ' + e.message);
     }
 }
 
-function showBanner(msg) {
-    const b = $('#banner');
-    b.textContent = msg;
-    b.style.display = msg ? 'block' : 'none';
+// ---- favorites ----
+async function toggleFav(ch) {
+    const on = !favorites.has(ch.identifier);
+    if (on) favorites.add(ch.identifier); else favorites.delete(ch.identifier);
+    render();
+    try { await fetch('/api/favorites/' + encodeURIComponent(ch.identifier), { method: on ? 'PUT' : 'DELETE' }); } catch {}
 }
 
+// ---- program detail ----
+function showDetail(ch, a) {
+    const start = new Date(a.datetime);
+    const end = new Date(start.getTime() + (a.duration || 1800) * 1000);
+    const img = (a.images && a.images[0] && a.images[0].url) || '';
+    const ep = a.episode && a.episode.episodeNumber != null
+        ? `S${(a.episode.season && a.episode.season.number) || '?'} · E${a.episode.episodeNumber}` : '';
+    $('#detailBody').innerHTML =
+        (img ? `<img src="${esc(img)}" alt="">` : '')
+        + `<div class="info"><h2>${esc(a.title || 'Program')}</h2>`
+        + `<div class="when">${esc(ch.name)} ${esc(chanNum(ch))} · ${fmtTime(start)}–${fmtTime(end)}${ep ? ' · ' + esc(ep) : ''}</div>`
+        + (a.genres && a.genres.length ? `<div class="chips">${a.genres.map(g => `<span class="chip">${esc(g)}</span>`).join('')}</div>` : '')
+        + `<div class="desc">${esc(a.description || 'No description available.')}</div></div>`;
+    $('#dWatch').onclick = () => { $('#detailModal').classList.remove('open'); watchChannel(ch, a); };
+    $('#detailModal').classList.add('open');
+}
+
+// ---- player ----
 let player = null;
 function destroyPlayer() {
     if (player) { try { player.destroy(); } catch {} player = null; }
     const v = $('#video'); v.pause(); v.removeAttribute('src'); v.load();
 }
-
 function watchChannel(ch, airing) {
-    const p = $('#player');
     $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
-    p.classList.add('open');
+    $('#player').classList.add('open');
     destroyPlayer();
-
+    // bump recent locally + let the server record it (stream endpoint does too)
+    recent = [{ id: ch.identifier, at: Date.now() }, ...recent.filter(r => r.id !== ch.identifier)].slice(0, 20);
     const video = $('#video');
     if (!window.mpegts || !mpegts.isSupported()) {
-        $('#pNote').textContent = 'This browser can\'t play live streams (Media Source Extensions unavailable).';
+        $('#pNote').textContent = "This browser can't play live streams (Media Source Extensions unavailable).";
         return;
     }
-    const ota = ch.kind === 'ota';
-    $('#pNote').textContent = ota
-        ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…'
-        : 'Starting stream…';
-
+    $('#pNote').textContent = ch.kind === 'ota'
+        ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…' : 'Starting stream…';
     player = mpegts.createPlayer(
         { type: 'mpegts', isLive: true, url: '/api/stream/' + encodeURIComponent(ch.identifier) },
-        {
-            lazyLoad: false,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 2.5,
-            liveBufferLatencyMinRemain: 0.4,
-            stashInitialSize: 1024 * 128,
-            autoCleanupSourceBuffer: true
-        }
+        { lazyLoad: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 2.5, liveBufferLatencyMinRemain: 0.4, stashInitialSize: 1024 * 128, autoCleanupSourceBuffer: true }
     );
     player.attachMediaElement(video);
-    player.on(mpegts.Events.ERROR, (type, detail) => {
-        $('#pNote').textContent = 'Stream error: ' + type + (detail ? ' (' + detail + ')' : '');
-    });
+    player.on(mpegts.Events.ERROR, (t, d) => { $('#pNote').textContent = 'Stream error: ' + t + (d ? ' (' + d + ')' : ''); });
     player.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
-    player.load();
-    video.play().catch(() => {});
+    player.load(); video.play().catch(() => {});
 }
-
 $('#pClose').onclick = () => { $('#player').classList.remove('open'); destroyPlayer(); };
+$('#pipBtn').onclick = async () => {
+    const v = $('#video');
+    try {
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else if (v.requestPictureInPicture) await v.requestPictureInPicture();
+        else $('#pNote').textContent = 'Picture-in-picture is not supported in this browser.';
+    } catch (e) { $('#pNote').textContent = 'PiP error: ' + e.message; }
+};
+
+// ---- recently watched ----
+$('#recentBtn').onclick = () => {
+    const list = $('#recentList'); list.innerHTML = '';
+    if (!recent.length) { list.innerHTML = '<div class="empty">Nothing watched yet.</div>'; }
+    for (const r of recent) {
+        const ch = chById[r.id]; if (!ch) continue;
+        const item = document.createElement('div'); item.className = 'recent-item';
+        const logoUrl = chanLogo(ch);
+        item.innerHTML = (logoUrl ? `<img src="${esc(logoUrl)}" alt="">` : '<div class="logo"></div>')
+            + `<div><div class="name">${esc(ch.name)}</div><div class="net">${esc(chanNum(ch))} · ${esc(chanNet(ch))}</div></div>`;
+        item.onclick = () => { $('#recentModal').classList.remove('open'); watchChannel(ch); };
+        list.appendChild(item);
+    }
+    $('#recentModal').classList.add('open');
+};
+$('#rClose').onclick = () => $('#recentModal').classList.remove('open');
+$('#dClose').onclick = () => $('#detailModal').classList.remove('open');
+
+// ---- search / filters ----
+let searchTimer;
+$('#search').oninput = (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = e.target.value.trim(); render(); }, 180); };
+$('#favFilter').onclick = () => { favOnly = !favOnly; $('#favFilter').classList.toggle('on', favOnly); render(); };
+
+// close overlays on backdrop click / Escape
+document.querySelectorAll('.overlay').forEach(o => o.onclick = (e) => { if (e.target === o) { o.classList.remove('open'); if (o.id === 'player') destroyPlayer(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach(o => { o.classList.remove('open'); if (o.id === 'player') destroyPlayer(); }); });
+
 $('#date').onchange = load;
 $('#today').onclick = () => { setToday(); load(); };
-$('#logout').onclick = async () => { await fetch('/api/logout', {method:'POST'}); location.href='/login'; };
+$('#logout').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
+function setToday() { $('#date').value = new Date().toISOString().slice(0, 10); }
+function initWindow() { const d = new Date(); d.setMinutes(d.getMinutes() < 30 ? 0 : 30, 0, 0); windowStart = new Date(d.getTime() - 30 * 60000); }
 
-function setToday() {
-    const d = new Date();
-    $('#date').value = d.toISOString().slice(0,10);
-}
-function initWindow() {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() < 30 ? 0 : 30, 0, 0);
-    windowStart = new Date(d.getTime() - 30 * 60000); // start 30 min ago
-}
-
-// ---- theme (Auto → Light → Dark) ----
+// ---- theme ----
 const THEME_KEY = 'tablo4u-theme';
 function applyTheme(t) {
     const root = document.documentElement;
-    if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t);
-    else root.removeAttribute('data-theme');
+    if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t); else root.removeAttribute('data-theme');
     const btn = $('#themeBtn');
     if (btn) btn.textContent = t === 'light' ? '☀️ Light' : t === 'dark' ? '🌙 Dark' : '🌓 Auto';
 }
 $('#themeBtn').onclick = () => {
     const cur = localStorage.getItem(THEME_KEY) || 'auto';
     const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
-    localStorage.setItem(THEME_KEY, next);
-    applyTheme(next);
+    localStorage.setItem(THEME_KEY, next); applyTheme(next);
 };
 applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
 
 // ---- admin: user management ----
 async function loadUsers() {
-    const t = $('#uTable');
-    t.innerHTML = '<tr><th>User</th><th>Role</th><th></th></tr>';
+    const t = $('#uTable'); t.innerHTML = '<tr><th>User</th><th>Role</th><th></th></tr>';
     try {
-        const users = await api('/api/users');
-        for (const u of users) {
+        for (const u of await api('/api/users')) {
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${u.username}</td><td class="role">${u.role}</td>`
-                + `<td style="text-align:right"><button class="del" data-u="${u.username}">Remove</button></td>`;
+            tr.innerHTML = `<td>${esc(u.username)}</td><td class="role">${esc(u.role)}</td>`
+                + `<td style="text-align:right"><button class="del" data-u="${esc(u.username)}">Remove</button></td>`;
             t.appendChild(tr);
         }
         t.querySelectorAll('.del').forEach(b => b.onclick = async () => {
             if (!confirm('Remove user ' + b.dataset.u + '?')) return;
             const r = await fetch('/api/users/' + encodeURIComponent(b.dataset.u), { method: 'DELETE' });
-            const j = await r.json();
-            if (!r.ok) $('#uMsg').textContent = j.error || 'Error';
-            else loadUsers();
+            const j = await r.json(); if (!r.ok) $('#uMsg').textContent = j.error || 'Error'; else loadUsers();
         });
     } catch (e) { $('#uMsg').textContent = e.message; }
 }
@@ -377,21 +456,17 @@ $('#usersBtn').onclick = () => { $('#uMsg').textContent = ''; $('#usersModal').c
 $('#uClose').onclick = () => $('#usersModal').classList.remove('open');
 $('#uAdd').onclick = async () => {
     $('#uMsg').textContent = '';
-    const r = await fetch('/api/users', { method: 'POST', headers: {'Content-Type':'application/json'},
+    const r = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: $('#uName').value, password: $('#uPass').value, role: $('#uAdmin').checked ? 'admin' : 'user' }) });
-    const j = await r.json();
-    if (!r.ok) { $('#uMsg').textContent = j.error || 'Error'; return; }
-    $('#uName').value = ''; $('#uPass').value = ''; $('#uAdmin').checked = false;
-    loadUsers();
+    const j = await r.json(); if (!r.ok) { $('#uMsg').textContent = j.error || 'Error'; return; }
+    $('#uName').value = ''; $('#uPass').value = ''; $('#uAdmin').checked = false; loadUsers();
 };
 
-(async function(){
-    const me = await fetch('/api/me').then(r=>r.json()).catch(()=>({}));
+(async function () {
+    const me = await fetch('/api/me').then(r => r.json()).catch(() => ({}));
     if (!me.open) $('#logout').style.display = '';
     if (me.user && me.user.role === 'admin') $('#usersBtn').style.display = '';
-    setToday();
-    initWindow();
-    await load();
+    setToday(); initWindow(); await load();
 })();
 </script>
 </body>

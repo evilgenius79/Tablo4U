@@ -152,6 +152,65 @@ const Auth = {
         }
 
         save(kept);
+    },
+
+    /**
+     * Per-user favorites + recently watched (safe subset).
+     *
+     * @param {string} username
+     * @returns {{favorites: string[], recent: {id:string, at:number}[]}}
+     */
+    getProfile(username) {
+        const u = load().find(x => x.username === String(username || '').trim().toLowerCase());
+
+        return { favorites: (u && u.favorites) || [], recent: (u && u.recent) || [] };
+    },
+
+    /**
+     * Add or remove a favorite channel for a user.
+     *
+     * @param {string} username
+     * @param {string} channelId
+     * @param {boolean} on
+     */
+    setFavorite(username, channelId, on) {
+        const users = load();
+
+        const u = users.find(x => x.username === String(username || '').trim().toLowerCase());
+
+        if (!u) return;
+
+        u.favorites = u.favorites || [];
+
+        const i = u.favorites.indexOf(channelId);
+
+        if (on && i < 0) u.favorites.push(channelId);
+
+        if (!on && i >= 0) u.favorites.splice(i, 1);
+
+        save(users);
+    },
+
+    /**
+     * Record a channel as recently watched (most-recent first, capped at 20).
+     *
+     * @param {string} username
+     * @param {string} channelId
+     */
+    addRecent(username, channelId) {
+        const users = load();
+
+        const u = users.find(x => x.username === String(username || '').trim().toLowerCase());
+
+        if (!u) return;
+
+        u.recent = (u.recent || []).filter(r => r.id !== channelId);
+
+        u.recent.unshift({ id: channelId, at: Date.now() });
+
+        u.recent = u.recent.slice(0, 20);
+
+        save(users);
     }
 };
 

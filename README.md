@@ -21,11 +21,17 @@ laptop, phone, or TV browser without being locked into the official apps.
 ## Features
 
 - 📺 **Native EPG guide** — a real timeline grid (now-line, live indicators,
-  date picker) built straight from Tablo's JSON guide data. No XMLTV.
+  date picker, **channel logos**) built straight from Tablo's JSON guide data.
+  No XMLTV.
 - ▶️ **In-browser live player** — plays streams via
-  [mpegts.js](https://github.com/xqq/mpegts.js) (bundled). OTT channels
-  (H.264) are remuxed cheaply; OTA channels (MPEG-2/AC3) are transcoded to
-  H.264/AAC by ffmpeg so they play in any modern browser.
+  [mpegts.js](https://github.com/xqq/mpegts.js) (bundled), with
+  **picture-in-picture**. OTT channels (H.264) are remuxed cheaply; OTA
+  channels (MPEG-2/AC3) are transcoded to H.264/AAC by ffmpeg so they play in
+  any modern browser.
+- ⭐ **Favorites & recently watched** — star channels (filter to just those),
+  and jump back to what you were watching — saved per user.
+- 🔎 **Search** the guide by channel or program, and click any program for a
+  **detail view** (still, description, genres, episode info).
 - 👥 **Multi-user accounts** — session login with scrypt-hashed passwords,
   admin vs. user roles, and an in-app user manager. No database needed
   (`data/users.json`).
@@ -123,6 +129,8 @@ All endpoints require a session (unless `OPEN=1`):
 | `GET` | `/api/channels` | Native channel lineup (JSON) |
 | `GET` | `/api/guide?date=YYYY-MM-DD` | Native guide airings per channel |
 | `GET` | `/api/stream/:channelId` | Live MPEG-TS stream |
+| `GET` | `/api/profile` | Current user's favorites + recently watched |
+| `PUT`/`DELETE` | `/api/favorites/:channelId` | Add/remove a favorite |
 | `GET` | `/api/users` | List users *(admin)* |
 | `POST` | `/api/users` | Add user *(admin)* |
 | `DELETE` | `/api/users/:username` | Remove user *(admin)* |
@@ -136,11 +144,12 @@ All endpoints require a session (unless `OPEN=1`):
 
 ## Roadmap
 
-- [ ] Channel logos & richer program details / descriptions
-- [ ] Favorites and "recently watched" per user
-- [ ] Search across the guide
+- [x] Channel logos & richer program details / descriptions
+- [x] Favorites and "recently watched" per user
+- [x] Search across the guide
+- [x] Picture-in-picture and mobile-optimized layout
 - [ ] DVR / recordings (pending Tablo endpoint exposure)
-- [ ] Picture-in-picture and mobile-optimized layout
+- [ ] Program reminders / "watch later"
 
 ## Status
 

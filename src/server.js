@@ -272,12 +272,46 @@ app.get('/api/guide', requireAuth, async (req, res) => {
 
 // Live player stream (MPEG-TS; played by mpegts.js in the browser).
 app.get('/api/stream/:channelId', requireAuth, (req, res) => {
+    // @ts-ignore - record recently-watched for the signed-in user
+    const user = req.session && req.session.user;
+
+    if (user) {
+        try { Auth.addRecent(user.username, req.params.channelId); } catch { /* non-fatal */ }
+    }
+
     return handleStream(req, res, {
         mock: MOCK,
         tablo,
         kindOf: (id) => channelKind.get(id),
         log: (m) => console.log('[tablo4u] ' + m)
     });
+});
+
+// ---- per-user favorites & recently watched ----
+
+app.get('/api/profile', requireAuth, (req, res) => {
+    // @ts-ignore
+    const user = req.session && req.session.user;
+
+    res.json(user ? Auth.getProfile(user.username) : { favorites: [], recent: [] });
+});
+
+app.put('/api/favorites/:channelId', requireAuth, (req, res) => {
+    // @ts-ignore
+    const user = req.session && req.session.user;
+
+    if (user) Auth.setFavorite(user.username, req.params.channelId, true);
+
+    res.json({ ok: true });
+});
+
+app.delete('/api/favorites/:channelId', requireAuth, (req, res) => {
+    // @ts-ignore
+    const user = req.session && req.session.user;
+
+    if (user) Auth.setFavorite(user.username, req.params.channelId, false);
+
+    res.json({ ok: true });
 });
 
 // ---- static UI ----
