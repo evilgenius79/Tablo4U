@@ -278,19 +278,31 @@ app.get('/api/guide', requireAuth, async (req, res) => {
 app.get('/api/device/probe', requireAuth, requireAdmin, async (req, res) => {
     if (!tablo) return res.status(502).json({ error: 'Tablo not connected' });
 
+    // ?path=/guide/channels/180 — fetch any single device path raw, so we can
+    // keep digging without rebuilding the exe.
+    if (req.query.path) {
+        const p = String(req.query.path);
+
+        try {
+            return res.json({ path: p, result: await tablo.deviceReq('GET', p) });
+        } catch (err) {
+            return res.json({ path: p, error: String(err && err.message || err) });
+        }
+    }
+
     const paths = [
-        '/server/info', '/server/tuners', '/tuners', '/server/capabilities',
-        '/server/settings', '/settings', '/channels', '/server/channels',
-        '/guide/channels', '/server/scan', '/scan', '/server/status', '/status'
+        '/server/info', '/server/tuners', '/server/capabilities',
+        '/server/netstatus', '/netstatus', '/server/net', '/guide/channels'
     ];
 
     /** @type {Record<string, any>} */
     const out = {};
 
-    // A raw cloud channel object too, in case signal is hiding there already.
+    // Raw cloud channel samples (one OTA, one OTT) in case signal hides there.
     try {
         const chs = await getChannels();
-        out['_cloud_channel_sample'] = chs[0] || null;
+        out['_cloud_ota_sample'] = chs.find(c => c && c.kind === 'ota') || null;
+        out['_cloud_ott_sample'] = chs.find(c => c && c.kind === 'ott') || null;
     } catch (err) {
         out['_cloud_channel_sample'] = { error: String(err && err.message || err) };
     }
@@ -299,14 +311,37 @@ app.get('/api/device/probe', requireAuth, requireAdmin, async (req, res) => {
         try {
             const r = await tablo.deviceReq('GET', p);
 
-            // Trim big arrays to a single sample so the response stays readable.
             out[p] = Array.isArray(r)
-                ? { type: 'array', length: r.length, sample: r[0] }
+                ? { type: 'array', length: r.length, sample: r.slice(0, 3) }
                 : (typeof r === 'string' ? r.slice(0, 300) : r);
         } catch (err) {
             out[p] = { error: String(err && err.message || err) };
         }
     }));
+
+    // Follow the /guide/channels list into a couple of per-channel resources —
+    // the most likely home for signal strength.
+    try {
+        const list = await tablo.deviceReq('GET', '/guide/channels');
+
+        /** @type {Record<string, any>} */
+        const details = {};
+
+        if (Array.isArray(list)) {
+            for (const entry of list.slice(0, 3)) {
+                const cp = typeof entry === 'string' ? entry : (entry && (entry.path || entry.href));
+
+                if (cp) {
+                    try { details[cp] = await tablo.deviceReq('GET', cp); }
+                    catch (err) { details[cp] = { error: String(err && err.message || err) }; }
+                }
+            }
+        }
+
+        out['_channel_detail_samples'] = details;
+    } catch (err) {
+        out['_channel_detail_samples'] = { error: String(err && err.message || err) };
+    }
 
     res.json(out);
 });
