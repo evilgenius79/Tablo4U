@@ -26,10 +26,9 @@ laptop, phone, or TV browser without being locked into the official apps.
   JSON guide data. No XMLTV.
 - ▶️ **In-browser live player** — plays streams via
   [mpegts.js](https://github.com/xqq/mpegts.js) (bundled), with
-  **picture-in-picture**. OTT channels stream from the device's direct URL and
-  are remuxed cheaply (and **don't occupy a tuner**); OTA channels (MPEG-2/AC3)
-  request a watch session (one tuner) and are transcoded to H.264/AAC by ffmpeg
-  so they play in any modern browser.
+  **picture-in-picture**. OTT channels are remuxed cheaply (already H.264) and
+  **don't occupy a tuner**; OTA channels (MPEG-2/AC3) use a tuner and are
+  transcoded to H.264/AAC by ffmpeg so they play in any modern browser.
 - ⭐ **Favorites & recently watched** — star channels (filter to just those),
   and jump back to what you were watching — saved per user.
 - 🔎 **Search** the guide by channel or program, and click any program for a
@@ -105,7 +104,7 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 
 > The **tuner count is read from the device** after login (`/server/info`), not
 > from config — so it's always correct and there's no `TUNER_COUNT` to set.
-> Only OTA channels use a tuner; OTT channels stream directly and don't.
+> Only OTA channels use a tuner; OTT channels don't.
 
 ## How it works
 
@@ -118,10 +117,10 @@ Browser ──HTTP──► Tablo4U server ──HTTPS──► Tablo cloud (log
 
 - **Auth & data** come from Tablo's cloud API (`login`, `account`, guide
   `airings`, channel lineup) — all JSON, served through to the browser as-is.
-- **Streams**: OTA channels ask the Tablo device for a watch session (one
-  tuner) and transcode MPEG-2/AC3 → H.264/AAC. OTT channels use the direct
-  `streamUrl` from the lineup — no watch session, no tuner — and are remuxed
-  with `-c copy`. Both are piped to the browser as MPEG-TS.
+- **Streams**: both OTA and OTT ask the Tablo device for a watch session, but
+  only OTA consumes a physical tuner. OTA (MPEG-2/AC3) is transcoded to
+  H.264/AAC; OTT (already H.264) is remuxed with `-c copy`. Both are piped to
+  the browser as MPEG-TS.
 
 ## API
 

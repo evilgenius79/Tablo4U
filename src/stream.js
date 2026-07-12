@@ -48,10 +48,9 @@ function otaArgs(playlistUrl) {
 }
 
 /**
- * OTT: remux the direct stream to MPEG-TS. Regenerate timestamps and drop
- * corrupt packets to avoid the skipping seen on some OTT feeds; fall back to a
- * transcode only if the source isn't H.264 (handled by libx264 below when
- * copy would fail is out of scope — copy is the cheap common case).
+ * OTT: remux the device's HLS playlist to MPEG-TS. OTT is already H.264/AAC so
+ * we copy (no transcode). Regenerate timestamps and drop corrupt packets to
+ * avoid the skipping seen on some OTT feeds.
  * @param {string} url
  * @returns {string[]}
  */
@@ -77,7 +76,6 @@ function ottArgs(url) {
  * @param {boolean} opts.mock
  * @param {import('./tablo').TabloClient|null} opts.tablo
  * @param {(id:string)=>('ota'|'ott'|undefined)} opts.kindOf
- * @param {(id:string)=>(string|undefined)} opts.ottUrlOf
  * @param {number} opts.tunerCount
  * @param {(msg:string)=>void} [opts.log]
  */
@@ -88,7 +86,10 @@ async function handleStream(req, res, opts) {
 
     const isOtt = opts.kindOf(channelId) === 'ott';
 
-    // OTT streams straight from the device's own URL and does not occupy a tuner.
+    // Only OTA channels consume a physical tuner. OTT still goes through the
+    // device's /watch endpoint (that's what actually returns a playable HLS
+    // playlist — the lineup's direct streamUrl isn't reliably playable), but it
+    // doesn't occupy a tuner slot.
     const usesTuner = !isOtt && !opts.mock;
 
     const limit = opts.tunerCount || 4;
@@ -104,16 +105,6 @@ async function handleStream(req, res, opts) {
 
     if (opts.mock) {
         args = mockArgs();
-    } else if (isOtt) {
-        const url = opts.ottUrlOf(channelId);
-
-        if (!url) {
-            res.status(502).json({ error: 'no OTT stream URL for channel' });
-
-            return;
-        }
-
-        args = ottArgs(url);
     } else {
         if (!opts.tablo) {
             res.status(502).send('Tablo not connected.');
@@ -137,7 +128,8 @@ async function handleStream(req, res, opts) {
             return;
         }
 
-        args = otaArgs(watch.playlist_url);
+        // OTT is already H.264/AAC → copy; OTA (MPEG-2/AC3) → transcode.
+        args = isOtt ? ottArgs(watch.playlist_url) : otaArgs(watch.playlist_url);
     }
 
     if (usesTuner) current += 1;

@@ -41,9 +41,6 @@ var tablo = null;
 /** channelId -> 'ota'|'ott' */
 const channelKind = new Map();
 
-/** channelId -> direct OTT stream URL (from the lineup) */
-const channelOtt = new Map();
-
 /** In-memory guide cache: date -> { at, data }. */
 const guideCache = new Map();
 
@@ -57,11 +54,6 @@ function indexKinds(channels) {
         if (!ch || !ch.identifier) continue;
 
         channelKind.set(ch.identifier, ch.kind);
-
-        // OTT channels carry a direct stream URL — used instead of a tuner.
-        if (ch.kind === 'ott' && ch.ott && ch.ott.streamUrl) {
-            channelOtt.set(ch.identifier, ch.ott.streamUrl);
-        }
     }
 }
 
@@ -332,7 +324,6 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
         mock: MOCK,
         tablo,
         kindOf: (id) => channelKind.get(id),
-        ottUrlOf: (id) => channelOtt.get(id),
         tunerCount: tablo ? tablo.tuners : 4,
         log: (m) => console.log('[tablo4u] ' + m)
     });
