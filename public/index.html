@@ -169,9 +169,9 @@
         <div id="rows"></div>
     </div>
     <div id="pager" style="display:none">
-        <button class="ghost" id="prevPage">‹ Prev</button>
+        <button class="ghost" id="prevPage" title="Show 2 hours earlier">‹ Earlier</button>
         <span id="pageInfo"></span>
-        <button class="ghost" id="nextPage">Next ›</button>
+        <button class="ghost" id="nextPage" title="Show 2 hours later">Later ›</button>
     </div>
 
     <!-- player -->
@@ -240,8 +240,9 @@
 
 <script src="/vendor/mpegts.js"></script>
 <script>
-const DAY_MIN = 1440, PX_PER_MIN = 3;   // full-day scrollable timeline
-const PAGE_SIZE = 30;                    // channels rendered per page
+const WINDOW_MIN = 240, PX_PER_MIN = 5;  // rolling window: ~1h before, ~3h after now
+const SHIFT_MIN = 120;                   // Earlier/Later navigation step
+const CHUNK = 50;                        // channels rendered per lazy-load batch
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -269,7 +270,7 @@ window.addEventListener('unhandledrejection', (e) => {
 
 let channels = [], guide = {}, windowStart;
 let favorites = new Set(), recent = [];
-let favOnly = false, query = '', page = 1;
+let favOnly = false, query = '';
 const chById = {};
 
 function selectedDateStr() { return $('#date').value; }
@@ -299,7 +300,7 @@ async function api(path, opts) {
 
 function buildAxis() {
     const axis = $('#timeaxis'); axis.innerHTML = '';
-    for (let m = 0; m < DAY_MIN; m += 30) {
+    for (let m = 0; m <= WINDOW_MIN; m += 30) {
         const t = new Date(windowStart.getTime() + m * 60000);
         const tick = document.createElement('div');
         tick.className = 'tick'; tick.style.width = (30 * PX_PER_MIN) + 'px'; tick.textContent = fmtTime(t);
@@ -319,98 +320,145 @@ function channelMatches(ch) {
 function updateNowline() {
     const nl = $('#nowline');
     const now = Date.now();
-    const winEnd = windowStart.getTime() + DAY_MIN * 60000;
-    if (isToday() && now >= windowStart.getTime() && now <= winEnd) {
+    const winEnd = windowStart.getTime() + WINDOW_MIN * 60000;
+    if (now >= windowStart.getTime() && now <= winEnd) {
         nl.style.left = `calc(var(--chan-w) + ${(now - windowStart.getTime()) / 60000 * PX_PER_MIN}px)`;
-        nl.style.height = ($('#rows').offsetHeight || 0) + 'px';   // span all rows, not just the viewport
+        nl.style.height = ($('#rows').offsetHeight || 0) + 'px';   // span all rendered rows
         nl.style.display = 'block';
     } else nl.style.display = 'none';
 }
 
-function renderPager(total, pages) {
-    const bar = $('#pager');
-    if (pages <= 1) { bar.style.display = 'none'; return; }
-    bar.style.display = 'flex';
-    $('#pageInfo').textContent = `Page ${page} of ${pages} · ${total} channels`;
-    $('#prevPage').disabled = page <= 1;
-    $('#nextPage').disabled = page >= pages;
+function updateWindowLabel() {
+    const end = new Date(windowStart.getTime() + WINDOW_MIN * 60000);
+    $('#pageInfo').textContent = `${fmtTime(windowStart)} – ${fmtTime(end)} · ${currentList.length} ch`;
+    $('#pager').style.display = 'flex';
+}
+
+// Build one channel row (pinned channel column + program track for the window).
+function buildRow(ch) {
+    const row = document.createElement('div'); row.className = 'row';
+    const c = document.createElement('div'); c.className = 'chan';
+    const logoUrl = chanLogo(ch);
+    const isFav = favorites.has(ch.identifier);
+    c.innerHTML =
+        (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.parentNode.replaceChild(Object.assign(document.createElement('div'),{className:'logo nologo',textContent:this.dataset.call}),this)" data-call="${esc(chanCall(ch))}">` : `<div class="logo nologo">${esc(chanCall(ch))}</div>`)
+        + `<div class="meta"><div class="num">${esc(chanNum(ch))}${resBadge(ch)}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
+        + `<button class="star ${isFav ? 'fav' : ''}" title="Favorite">${isFav ? '★' : '☆'}</button>`;
+    c.querySelector('.meta').onclick = () => watchChannel(ch);
+    c.querySelector('.star').onclick = (e) => { e.stopPropagation(); toggleFav(ch); };
+    row.appendChild(c);
+
+    const winStartMs = windowStart.getTime();
+    const winEndMs = winStartMs + WINDOW_MIN * 60000;
+    const now = Date.now();
+    const track = document.createElement('div'); track.className = 'track'; track.style.width = (WINDOW_MIN * PX_PER_MIN) + 'px';
+    for (const a of (guide[ch.identifier] || [])) {
+        const start = new Date(a.datetime);
+        const end = new Date(start.getTime() + (a.duration || 1800) * 1000);
+        if (end.getTime() <= winStartMs || start.getTime() >= winEndMs) continue;
+        const left = Math.max(0, (start.getTime() - winStartMs) / 60000) * PX_PER_MIN;
+        const right = Math.min(WINDOW_MIN, (end.getTime() - winStartMs) / 60000) * PX_PER_MIN;
+        const el = document.createElement('div');
+        el.className = 'prog' + (start.getTime() <= now && now < end.getTime() ? ' live' : '');
+        el.style.left = left + 'px'; el.style.width = Math.max(24, right - left - 4) + 'px';
+        el.innerHTML = `<div class="t">${esc(a.title || (a.show && a.show.title) || 'Program')}</div>`
+            + `<div class="sub">${fmtTime(start)}${a.description ? ' · ' + esc(a.description) : ''}</div>`;
+        el.onclick = () => showDetail(ch, a);
+        track.appendChild(el);
+    }
+    row.appendChild(track);
+    return row;
+}
+
+let currentList = [];
+let renderedCount = 0;
+
+// Append the next batch of channel rows (lazy load on vertical scroll).
+function appendRows(n) {
+    const rows = $('#rows');
+    const end = Math.min(currentList.length, renderedCount + n);
+    for (let i = renderedCount; i < end; i++) rows.appendChild(buildRow(currentList[i]));
+    renderedCount = end;
+    updateNowline();
 }
 
 function render() {
     buildAxis();
     const rows = $('#rows'); rows.innerHTML = '';
-    const winEnd = new Date(windowStart.getTime() + DAY_MIN * 60000);
-    const now = Date.now();
-
-    const all = filteredChannels();
-    const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
-    if (page > pages) page = pages;
-    const list = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-    renderPager(all.length, pages);
-
-    if (!all.length) { rows.innerHTML = '<div class="empty">No channels match.</div>'; $('#nowline').style.display = 'none'; return; }
-
-    for (const ch of list) {
-        const row = document.createElement('div'); row.className = 'row';
-        const c = document.createElement('div'); c.className = 'chan';
-        const logoUrl = chanLogo(ch);
-        const isFav = favorites.has(ch.identifier);
-        c.innerHTML =
-            (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.parentNode.replaceChild(Object.assign(document.createElement('div'),{className:'logo nologo',textContent:this.dataset.call}),this)" data-call="${esc(chanCall(ch))}">` : `<div class="logo nologo">${esc(chanCall(ch))}</div>`)
-            + `<div class="meta"><div class="num">${esc(chanNum(ch))}${resBadge(ch)}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
-            + `<button class="star ${isFav ? 'fav' : ''}" title="Favorite">${isFav ? '★' : '☆'}</button>`;
-        c.querySelector('.meta').onclick = () => watchChannel(ch);
-        c.querySelector('.star').onclick = (e) => { e.stopPropagation(); toggleFav(ch); };
-        row.appendChild(c);
-
-        const track = document.createElement('div'); track.className = 'track'; track.style.width = (DAY_MIN * PX_PER_MIN) + 'px';
-        for (const a of (guide[ch.identifier] || [])) {
-            const start = new Date(a.datetime);
-            const end = new Date(start.getTime() + (a.duration || 1800) * 1000);
-            if (end <= windowStart || start >= winEnd) continue;
-            const left = Math.max(0, (start - windowStart) / 60000) * PX_PER_MIN;
-            const right = Math.min(DAY_MIN, (end - windowStart) / 60000) * PX_PER_MIN;
-            const el = document.createElement('div');
-            el.className = 'prog' + (start.getTime() <= now && now < end.getTime() ? ' live' : '');
-            el.style.left = left + 'px'; el.style.width = Math.max(24, right - left - 4) + 'px';
-            el.innerHTML = `<div class="t">${esc(a.title || (a.show && a.show.title) || 'Program')}</div>`
-                + `<div class="sub">${fmtTime(start)}${a.description ? ' · ' + esc(a.description) : ''}</div>`;
-            el.onclick = () => showDetail(ch, a);
-            track.appendChild(el);
-        }
-        row.appendChild(track); rows.appendChild(row);
-    }
-
-    updateNowline();
+    currentList = filteredChannels();
+    renderedCount = 0;
+    updateWindowLabel();
+    if (!currentList.length) { rows.innerHTML = '<div class="empty">No channels match.</div>'; $('#nowline').style.display = 'none'; return; }
+    appendRows(CHUNK);
 }
+
+// Lazy-load more channels as the grid nears the bottom.
+$('#grid').addEventListener('scroll', () => {
+    const g = $('#grid');
+    if (renderedCount < currentList.length && g.scrollTop + g.clientHeight >= g.scrollHeight - 300) appendRows(CHUNK);
+});
 
 function computeWindow() {
-    // Start the timeline at local midnight of the selected date, so the whole
-    // day is scrollable and picking a date jumps to it.
-    windowStart = new Date(selectedDateStr() + 'T00:00:00');
+    // Anchor ~1h before the current clock time on the selected day: ~1h of
+    // context behind, ~3h ahead — no more scrolling past hours of dead
+    // early-morning programming late in the day.
+    const now = new Date();
+    const d = new Date(selectedDateStr() + 'T00:00:00');
+    d.setHours(now.getHours(), 0, 0, 0);
+    windowStart = new Date(d.getTime() - 60 * 60000);
 }
 
-function scrollToNow() {
-    if (!isToday()) { $('#grid').scrollLeft = 0; return; }
-    const off = (Date.now() - windowStart.getTime()) / 60000 * PX_PER_MIN;
-    $('#grid').scrollLeft = Math.max(0, off - 140);
+// ---- guide data (cached per calendar day; a window can span two days) ----
+let guideByDate = {};
+
+function dstr(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+function datesForWindow() {
+    const end = new Date(windowStart.getTime() + WINDOW_MIN * 60000);
+    return [...new Set([dstr(windowStart), dstr(end)])];
+}
+async function ensureGuide(dates) {
+    await Promise.all(dates.map(async (d) => {
+        if (guideByDate[d]) return;
+        try { const g = await api('/api/guide?date=' + d); guideByDate[d] = (g && g.guide) || {}; }
+        catch { guideByDate[d] = {}; }
+    }));
+}
+function rebuildGuide() {
+    guide = {};
+    for (const d of datesForWindow()) {
+        const gd = guideByDate[d]; if (!gd) continue;
+        for (const id in gd) (guide[id] = guide[id] || []).push(...gd[id]);
+    }
+}
+async function setWindow(newStart) {
+    windowStart = newStart;
+    $('#status').textContent = 'Loading…';
+    await ensureGuide(datesForWindow());
+    rebuildGuide();
+    render();
+    $('#grid').scrollTop = 0;
+    $('#status').textContent = `${channels.length} channels`;
+}
+function shiftWindow(mins) { return setWindow(new Date(windowStart.getTime() + mins * 60000)); }
 
 async function load() {
     try {
-        const date = selectedDateStr();
         computeWindow();
         $('#status').textContent = 'Loading guide…';
-        const [chs, g, prof] = await Promise.all([
-            api('/api/channels'), api('/api/guide?date=' + date), api('/api/profile').catch(()=>({favorites:[],recent:[]}))
+        const [chs, prof] = await Promise.all([
+            api('/api/channels'), api('/api/profile').catch(() => ({ favorites: [], recent: [] }))
         ]);
         if (!chs) return;
-        channels = chs; guide = (g && g.guide) || {};
+        channels = chs;
         for (const ch of channels) chById[ch.identifier] = ch;
         favorites = new Set((prof && prof.favorites) || []);
         recent = (prof && prof.recent) || [];
+        guideByDate = {};
+        await ensureGuide(datesForWindow());
+        rebuildGuide();
         render();
-        scrollToNow();
         $('#status').textContent = `${channels.length} channels`;
     } catch (e) {
         $('#status').textContent = 'Error';
@@ -539,19 +587,19 @@ $('#dClose').onclick = () => $('#detailModal').classList.remove('open');
 
 // ---- search / filters ----
 let searchTimer;
-$('#search').oninput = (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = e.target.value.trim(); page = 1; render(); }, 180); };
-$('#favFilter').onclick = () => { favOnly = !favOnly; $('#favFilter').classList.toggle('on', favOnly); page = 1; render(); };
+$('#search').oninput = (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = e.target.value.trim(); $('#grid').scrollTop = 0; render(); }, 180); };
+$('#favFilter').onclick = () => { favOnly = !favOnly; $('#favFilter').classList.toggle('on', favOnly); $('#grid').scrollTop = 0; render(); };
 
 // close overlays on backdrop click / Escape (the player routes through
 // closePlayer so a picture-in-picture stream keeps playing instead of freezing)
 document.querySelectorAll('.overlay').forEach(o => o.onclick = (e) => { if (e.target === o) { if (o.id === 'player') closePlayer(); else o.classList.remove('open'); } });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach(o => { if (o.id === 'player') closePlayer(); else o.classList.remove('open'); }); });
 
-$('#date').onchange = () => { page = 1; load(); };
-$('#today').onclick = () => { setToday(); page = 1; load(); };
+$('#date').onchange = () => load();
+$('#today').onclick = () => { setToday(); load(); };
 $('#logout').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
-$('#prevPage').onclick = () => { if (page > 1) { page--; render(); $('#grid').scrollTop = 0; } };
-$('#nextPage').onclick = () => { page++; render(); $('#grid').scrollTop = 0; };
+$('#prevPage').onclick = () => shiftWindow(-SHIFT_MIN);
+$('#nextPage').onclick = () => shiftWindow(SHIFT_MIN);
 function setToday() { $('#date').value = new Date().toISOString().slice(0, 10); }
 // keep the now-line moving as time passes
 setInterval(() => { if (windowStart) updateNowline(); }, 30000);

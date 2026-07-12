@@ -20,10 +20,10 @@ laptop, phone, or TV browser without being locked into the official apps.
 
 ## Features
 
-- 📺 **Native EPG guide** — a full-day scrollable timeline grid (live now-line,
-  live indicators, date picker that jumps to any day, **channel logos**, and
-  **pagination** so 100+ channel lineups stay fast) built straight from Tablo's
-  JSON guide data. No XMLTV.
+- 📺 **Native EPG guide** — a rolling timeline grid (~1h back to ~3h ahead with
+  Earlier/Later navigation, live now-line, live indicators, date picker,
+  **channel logos**, **HD/SD badges**, and **lazy-loaded rows** so 100+ channel
+  lineups stay fast) built straight from Tablo's JSON guide data. No XMLTV.
 - ▶️ **In-browser live player** — plays streams via
   [mpegts.js](https://github.com/xqq/mpegts.js) (bundled), with
   **picture-in-picture**. OTT channels are remuxed cheaply (already H.264) and
@@ -153,7 +153,8 @@ All endpoints require a session (unless `OPEN=1`):
 - [x] Favorites and "recently watched" per user
 - [x] Search across the guide
 - [x] Picture-in-picture and mobile-optimized layout
-- [x] Full-day scrollable timeline, date-jump navigation, and pagination
+- [x] Rolling time window (~1h back / ~3h ahead) with Earlier/Later navigation,
+      date-jump, and lazy-loaded channel rows
 - [x] Tuner count auto-detected from the device (OTT channels tuner-free)
 - [ ] DVR / recordings (pending Tablo endpoint exposure)
 - [ ] Program reminders / "watch later"

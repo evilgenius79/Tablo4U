@@ -48,8 +48,8 @@ function otaArgs(playlistUrl) {
 }
 
 /**
- * OTT copy (cheap remux). Works on feeds without mid-stream discontinuities;
- * opt in with OTT_COPY=1. Kept as an option because it's the lightest path.
+ * OTT copy (cheap remux) — the default. Works well for most feeds and is the
+ * lightest path (no re-encode).
  * @param {string} url
  * @returns {string[]}
  */
@@ -67,16 +67,16 @@ function ottCopyArgs(url) {
 }
 
 /**
- * OTT default: transcode the device's HLS to a continuous H.264/AAC MPEG-TS.
- * FAST/OTT feeds splice ads with HLS discontinuities and timestamp resets that
- * `-c copy` passes straight through — which is what makes mpegts.js skip and
- * break up. Re-encoding normalizes timestamps and codecs, so playback is
- * smooth at the cost of some CPU. Set OTT_COPY=1 to use the cheap copy path.
+ * OTT stream args. Copy (remux) by default — light and works for most setups.
+ * Some FAST/OTT feeds splice ads with HLS discontinuities/timestamp resets that
+ * `-c copy` passes through, which can make mpegts.js skip on certain hosts; set
+ * OTT_TRANSCODE=1 to re-encode to a continuous H.264/AAC MPEG-TS instead (fixes
+ * the skipping at the cost of CPU).
  * @param {string} url
  * @returns {string[]}
  */
 function ottArgs(url) {
-    if (process.env.OTT_COPY == '1') return ottCopyArgs(url);
+    if (process.env.OTT_TRANSCODE != '1') return ottCopyArgs(url);
 
     return [
         '-fflags', '+genpts',
