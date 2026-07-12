@@ -409,10 +409,30 @@ function showDetail(ch, a) {
 
 // ---- player ----
 let player = null;
+let closingPlayer = false;   // true while we intentionally tear the stream down
 function destroyPlayer() {
     if (player) { try { player.destroy(); } catch {} player = null; }
     const v = $('#video'); v.pause(); v.removeAttribute('src'); v.load();
 }
+function inPiP() { return document.pictureInPictureElement === $('#video'); }
+// Close the player UI. While the video is popped out to picture-in-picture we
+// keep the stream running (just hide the modal) so PiP doesn't freeze; a real
+// close exits PiP and tears the stream down (freeing the tuner).
+async function closePlayer() {
+    if (inPiP() && !closingPlayer) { $('#player').classList.remove('open'); return; }
+    closingPlayer = true;
+    try {
+        if (document.pictureInPictureElement) { try { await document.exitPictureInPicture(); } catch {} }
+        $('#player').classList.remove('open');
+        destroyPlayer();
+    } finally { closingPlayer = false; }
+}
+// Returning from PiP (back-to-tab or closing the float): show the modal again
+// so the live stream stays visible in-page instead of vanishing. Only an
+// explicit Close (closingPlayer) stops the stream.
+$('#video').addEventListener('leavepictureinpicture', () => {
+    if (!closingPlayer && player) $('#player').classList.add('open');
+});
 function watchChannel(ch, airing) {
     $('#pTitle').textContent = (airing && airing.title) ? `${ch.name} — ${airing.title}` : (ch.name || 'Live');
     $('#player').classList.add('open');
@@ -436,13 +456,18 @@ function watchChannel(ch, airing) {
     player.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
     player.load(); video.play().catch(() => {});
 }
-$('#pClose').onclick = () => { $('#player').classList.remove('open'); destroyPlayer(); };
+$('#pClose').onclick = () => closePlayer();
 $('#pipBtn').onclick = async () => {
     const v = $('#video');
     try {
-        if (document.pictureInPictureElement) await document.exitPictureInPicture();
-        else if (v.requestPictureInPicture) await v.requestPictureInPicture();
-        else $('#pNote').textContent = 'Picture-in-picture is not supported in this browser.';
+        if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();   // re-shows the modal via the leave handler
+        } else if (v.requestPictureInPicture) {
+            await v.requestPictureInPicture();
+            $('#player').classList.remove('open');   // hand off: pop out and return to the guide
+        } else {
+            $('#pNote').textContent = 'Picture-in-picture is not supported in this browser.';
+        }
     } catch (e) { $('#pNote').textContent = 'PiP error: ' + e.message; }
 };
 
@@ -469,9 +494,10 @@ let searchTimer;
 $('#search').oninput = (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = e.target.value.trim(); page = 1; render(); }, 180); };
 $('#favFilter').onclick = () => { favOnly = !favOnly; $('#favFilter').classList.toggle('on', favOnly); page = 1; render(); };
 
-// close overlays on backdrop click / Escape
-document.querySelectorAll('.overlay').forEach(o => o.onclick = (e) => { if (e.target === o) { o.classList.remove('open'); if (o.id === 'player') destroyPlayer(); } });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach(o => { o.classList.remove('open'); if (o.id === 'player') destroyPlayer(); }); });
+// close overlays on backdrop click / Escape (the player routes through
+// closePlayer so a picture-in-picture stream keeps playing instead of freezing)
+document.querySelectorAll('.overlay').forEach(o => o.onclick = (e) => { if (e.target === o) { if (o.id === 'player') closePlayer(); else o.classList.remove('open'); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach(o => { if (o.id === 'player') closePlayer(); else o.classList.remove('open'); }); });
 
 $('#date').onchange = () => { page = 1; load(); };
 $('#today').onclick = () => { setToday(); page = 1; load(); };
