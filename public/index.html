@@ -290,7 +290,9 @@
     </div>
 
 <script src="/vendor/mpegts.js"></script>
+<script src="/vendor/hls.js"></script>
 <script>
+const CONFIG = { ottDirectHls: false };
 const WINDOW_MIN = 240, PX_PER_MIN = 5;  // rolling window: ~1h before, ~3h after now
 const SHIFT_MIN = 120;                   // Earlier/Later navigation step
 const CHUNK = 50;                        // channels rendered per lazy-load batch
@@ -544,6 +546,7 @@ function showDetail(ch, a) {
 
 // ---- player ----
 let player = null;
+let hls = null;
 let closingPlayer = false;   // true while we intentionally tear the stream down
 function destroyPlayer() {
     if (player) {
@@ -555,7 +558,28 @@ function destroyPlayer() {
         try { player.destroy(); } catch {}
         player = null;
     }
+    if (hls) { try { hls.destroy(); } catch {} hls = null; }
     const v = $('#video'); try { v.pause(); v.removeAttribute('src'); v.load(); } catch {}
+}
+
+// Direct HLS playback (opt-in OTT_DIRECT_HLS): play the lineup's m3u8 in the
+// browser via hls.js — no server ffmpeg. Adaptive bitrate is handled by the
+// browser. Needs the OTT CDN to allow CORS; if it doesn't, this fails and you
+// fall back by turning the flag off.
+function playHls(url) {
+    const video = $('#video');
+    if (video.canPlayType('application/vnd.apple.mpegurl')) { // native (Safari/iOS)
+        video.src = url; video.play().catch(() => {}); return true;
+    }
+    if (window.Hls && Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (e, d) => { if (d && d.fatal) $('#pNote').textContent = 'HLS error: ' + d.type + (d.details ? ' (' + d.details + ')' : '') + ' — CORS may be blocking direct play; turn OTT_DIRECT_HLS off to use the server path.'; });
+        video.play().catch(() => {});
+        return true;
+    }
+    return false;
 }
 function inPiP() { return document.pictureInPictureElement === $('#video'); }
 // Close the player UI. While the video is popped out to picture-in-picture we
@@ -605,6 +629,15 @@ function watchChannel(ch, airing) {
     $('#player').classList.add('open');
     // bump recent locally + let the server record it (stream endpoint does too)
     recent = [{ id: ch.identifier, at: Date.now() }, ...recent.filter(r => r.id !== ch.identifier)].slice(0, 20);
+
+    // OTT direct HLS (opt-in): play the lineup m3u8 in-browser, no server ffmpeg.
+    if (ch.kind === 'ott' && CONFIG.ottDirectHls && ch.ott && ch.ott.streamUrl) {
+        destroyPlayer();
+        $('#pNote').textContent = 'OTT — direct HLS…';
+        if (!playHls(ch.ott.streamUrl)) $('#pNote').textContent = "This browser can't play HLS directly.";
+        return;
+    }
+
     $('#pNote').textContent = ch.kind === 'ota'
         ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…' : 'Starting stream…';
     const p = startPlayer('/api/stream/' + encodeURIComponent(ch.identifier), true);
@@ -808,6 +841,7 @@ $('#uAdd').onclick = async () => {
 (async function () {
     const me = await fetch('/api/me').then(r => r.json()).catch(() => ({}));
     if (!me.open) $('#logout').style.display = '';
+    CONFIG.ottDirectHls = !!me.ottDirectHls;
     isAdmin = !!(me.user && me.user.role === 'admin') || !!me.open;
     if (me.user && me.user.role === 'admin') $('#usersBtn').style.display = '';
     setToday(); await load();

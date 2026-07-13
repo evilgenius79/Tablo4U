@@ -272,7 +272,7 @@ app.get('/api/me', (req, res) => {
     // @ts-ignore
     const user = req.session && req.session.user;
 
-    res.json({ authed: OPEN || !!user, open: OPEN, user: user || null });
+    res.json({ authed: OPEN || !!user, open: OPEN, user: user || null, ottDirectHls: process.env.OTT_DIRECT_HLS == '1' });
 });
 
 // ---- user administration (admin only) ----

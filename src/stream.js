@@ -104,6 +104,76 @@ function ottArgs(url, out = 'pipe:1', durationSec) {
 }
 
 /**
+ * Given an HLS master playlist body, returns the absolute URL of the
+ * highest-bandwidth variant (so OTT plays HD instead of whatever ffmpeg picks
+ * by default). Returns null if it isn't a master playlist / can't be parsed.
+ * @param {string} text
+ * @param {string} baseUrl
+ * @returns {string|null}
+ */
+function pickBestVariant(text, baseUrl) {
+    if (!text || !text.includes('#EXT-X-STREAM-INF')) return null;
+
+    const lines = text.split(/\r?\n/);
+
+    let best = null;
+
+    let bestBw = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+        const m = /#EXT-X-STREAM-INF:.*?BANDWIDTH=(\d+)/i.exec(lines[i]);
+
+        if (!m) continue;
+
+        // The variant URI is the next non-blank, non-comment line.
+        let j = i + 1;
+
+        while (j < lines.length && (lines[j].trim() === '' || lines[j].startsWith('#'))) j++;
+
+        const uri = lines[j] && lines[j].trim();
+
+        const bw = parseInt(m[1], 10);
+
+        if (uri && bw > bestBw) { bestBw = bw; best = uri; }
+    }
+
+    if (!best) return null;
+
+    try {
+        const abs = new URL(best, baseUrl);
+
+        // Carry the master's query (ad-macros) onto the variant if it has none.
+        if (!abs.search) { const q = new URL(baseUrl).search; if (q) abs.search = q; }
+
+        return abs.toString();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Resolves an OTT master playlist to its best (highest-bitrate) variant, so the
+ * stream doesn't get stuck on a low-res rendition. Best-effort: on any failure
+ * (or a non-master playlist) it returns the original URL unchanged. Disable with
+ * OTT_NO_VARIANT=1.
+ * @param {string} url
+ * @returns {Promise<string>}
+ */
+async function resolveBestVariant(url) {
+    if (process.env.OTT_NO_VARIANT == '1') return url;
+
+    try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+
+        if (!res.ok) return url;
+
+        return pickBestVariant(await res.text(), url) || url;
+    } catch {
+        return url;
+    }
+}
+
+/**
  * Requests a watch session and returns a playable playlist URL.
  * @param {import('./tablo').TabloClient} tablo
  * @param {string} channelId
@@ -142,7 +212,9 @@ async function buildArgs(o) {
     if (o.isOtt) {
         if (!o.ottUrl) throw new Error('no OTT stream URL in lineup');
 
-        return ottArgs(o.ottUrl, o.out, o.durationSec);
+        const src = await resolveBestVariant(o.ottUrl);
+
+        return ottArgs(src, o.out, o.durationSec);
     }
 
     if (!o.tablo) throw new Error('Tablo not connected');
@@ -242,4 +314,4 @@ async function handleStream(req, res, opts) {
     res.on('close', cleanup);
 }
 
-module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl };
+module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl, pickBestVariant, resolveBestVariant };

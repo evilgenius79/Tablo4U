@@ -125,9 +125,13 @@ Browser ──HTTP──► Tablo4U server ──HTTPS──► Tablo cloud (log
   `airings`, channel lineup) — all JSON, served through to the browser as-is.
 - **Streams**: OTA asks the Tablo device for a watch session (a tuner) and is
   transcoded MPEG-2/AC3 → H.264/AAC. OTT streams from the **direct URL in the
-  lineup** (`ott.streamUrl`) — no device request, no tuner — and is remuxed with
-  `-c copy` (or transcoded if `OTT_TRANSCODE=1`). Both are piped to the browser
-  as MPEG-TS.
+  lineup** (`ott.streamUrl`) — no device request, no tuner — with the
+  highest-bitrate HLS variant selected so it plays HD (disable with
+  `OTT_NO_VARIANT=1`), remuxed with `-c copy` (or transcoded if
+  `OTT_TRANSCODE=1`). Both are piped to the browser as MPEG-TS. Optionally,
+  `OTT_DIRECT_HLS=1` plays OTT's HLS **directly in the browser** (hls.js, no
+  server ffmpeg) — lighter, with browser-managed adaptive bitrate — when the
+  OTT CDN allows CORS.
 
 ## API
 
