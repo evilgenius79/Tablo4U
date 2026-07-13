@@ -104,6 +104,7 @@ function stamp(d) {
  * @param {string} o.channelId
  * @param {string} o.channelName
  * @param {'ota'|'ott'|undefined} o.kind
+ * @param {string} [o.ottUrl] direct OTT stream URL from the lineup
  * @param {string} [o.title]
  * @param {number} o.minutes
  * @param {(m:string)=>void} [o.log]
@@ -134,7 +135,7 @@ async function start(o) {
     let args;
 
     try {
-        args = await buildArgs({ mock: o.mock, tablo: o.tablo, channelId: o.channelId, isOtt, out: file, durationSec });
+        args = await buildArgs({ mock: o.mock, tablo: o.tablo, channelId: o.channelId, isOtt, ottUrl: o.ottUrl, out: file, durationSec });
     } catch (err) {
         if (usesTuner) tuners.release();
 

@@ -46,6 +46,9 @@ const channelKind = new Map();
 /** channelId -> display name (for recording metadata). */
 const channelName = new Map();
 
+/** channelId -> direct OTT stream URL, parsed from the lineup. */
+const channelOtt = new Map();
+
 /** In-memory guide cache: date -> { at, data }. */
 const guideCache = new Map();
 
@@ -85,6 +88,12 @@ function indexKinds(channels) {
         const k = ch.ota || ch.ott || {};
 
         channelName.set(ch.identifier, ch.name || k.callSign || ch.identifier);
+
+        // OTT channels carry a direct stream URL in the lineup — use it instead
+        // of a device watch request (no tuner needed).
+        if (ch.kind === 'ott' && ch.ott && ch.ott.streamUrl) {
+            channelOtt.set(ch.identifier, ch.ott.streamUrl);
+        }
     }
 }
 
@@ -402,6 +411,7 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
         mock: MOCK,
         tablo,
         kindOf: (id) => channelKind.get(id),
+        ottUrlOf: (id) => channelOtt.get(id),
         log: (m) => console.log('[tablo4u] ' + m)
     });
 });
@@ -424,6 +434,7 @@ app.post('/api/recordings/start', requireAuth, async (req, res) => {
             channelId,
             channelName: channelName.get(channelId) || (req.body || {}).channelName || channelId,
             kind: channelKind.get(channelId),
+            ottUrl: channelOtt.get(channelId),
             title,
             minutes: Math.max(1, Math.min(360, parseInt(minutes, 10) || 60)),
             log: (m) => console.log('[tablo4u] ' + m)

@@ -4,8 +4,8 @@
  * the browser as MPEG-TS (played client-side by mpegts.js):
  *   - OTA: request a watch session from the device (uses a tuner) and
  *     transcode MPEG-2/AC3 → H.264/AAC.
- *   - OTT: request a watch session (no tuner) and remux (or transcode) to
- *     MPEG-TS.
+ *   - OTT: stream the lineup's direct URL (`ott.streamUrl`) — no device
+ *     request, no tuner — and remux (or transcode) to MPEG-TS.
  * The arg builders and getPlaylistUrl are exported so the recorder reuses the
  * exact same pipeline, writing to a file instead of the response.
  * In MOCK mode it emits a test pattern so the player is demoable without a Tablo.
@@ -120,12 +120,18 @@ async function getPlaylistUrl(tablo, channelId) {
 }
 
 /**
- * Builds the ffmpeg args for a channel, resolving its watch/playlist URL.
+ * Builds the ffmpeg args for a channel.
+ *  - OTT: stream straight from the lineup's direct URL (`ott.streamUrl`) — no
+ *    device round-trip, no tuner. (The URL works as-is, ad-macro placeholders
+ *    and all.)
+ *  - OTA: request a watch session from the device (a tuner) for the playlist.
+ *
  * @param {object} o
  * @param {boolean} o.mock
  * @param {import('./tablo').TabloClient|null} o.tablo
  * @param {string} o.channelId
  * @param {boolean} o.isOtt
+ * @param {string} [o.ottUrl] direct OTT stream URL from the lineup
  * @param {string} [o.out]
  * @param {number} [o.durationSec]
  * @returns {Promise<string[]>}
@@ -133,11 +139,17 @@ async function getPlaylistUrl(tablo, channelId) {
 async function buildArgs(o) {
     if (o.mock) return mockArgs(o.out, o.durationSec);
 
+    if (o.isOtt) {
+        if (!o.ottUrl) throw new Error('no OTT stream URL in lineup');
+
+        return ottArgs(o.ottUrl, o.out, o.durationSec);
+    }
+
     if (!o.tablo) throw new Error('Tablo not connected');
 
     const url = await getPlaylistUrl(o.tablo, o.channelId);
 
-    return o.isOtt ? ottArgs(url, o.out, o.durationSec) : otaArgs(url, o.out, o.durationSec);
+    return otaArgs(url, o.out, o.durationSec);
 }
 
 /**
@@ -149,6 +161,7 @@ async function buildArgs(o) {
  * @param {boolean} opts.mock
  * @param {import('./tablo').TabloClient|null} opts.tablo
  * @param {(id:string)=>('ota'|'ott'|undefined)} opts.kindOf
+ * @param {(id:string)=>(string|undefined)} [opts.ottUrlOf] direct OTT URL from the lineup
  * @param {(msg:string)=>void} [opts.log]
  */
 async function handleStream(req, res, opts) {
@@ -158,8 +171,8 @@ async function handleStream(req, res, opts) {
 
     const isOtt = opts.kindOf(channelId) === 'ott';
 
-    // Only OTA channels consume a physical tuner; OTT still uses /watch (that's
-    // what returns a playable playlist) but takes no tuner slot.
+    // Only OTA channels consume a physical tuner. OTT streams straight from the
+    // lineup URL — no device request, no tuner slot.
     const usesTuner = !isOtt && !opts.mock;
 
     // Reserve before the async watch so concurrent requests can't oversubscribe.
@@ -173,7 +186,10 @@ async function handleStream(req, res, opts) {
     let args;
 
     try {
-        args = await buildArgs({ mock: opts.mock, tablo: opts.tablo, channelId, isOtt });
+        args = await buildArgs({
+            mock: opts.mock, tablo: opts.tablo, channelId, isOtt,
+            ottUrl: isOtt && opts.ottUrlOf ? opts.ottUrlOf(channelId) : undefined
+        });
     } catch (err) {
         if (usesTuner) tuners.release();
 
