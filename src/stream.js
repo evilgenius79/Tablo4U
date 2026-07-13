@@ -15,6 +15,11 @@ const { spawn } = require('child_process');
 
 const tuners = require('./tuners');
 
+// Some OTT/FAST CDNs (e.g. Amagi) gate on User-Agent and reject ffmpeg's default
+// "Lavf/…" — which shows up as ffmpeg starting and dying instantly. Present as a
+// browser so the CDN serves the stream.
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
 /**
  * ffmpeg args for a mock test pattern (color bars + tone).
  * @param {string} [out] output target (default the stdout pipe)
@@ -64,6 +69,7 @@ function otaArgs(url, out = 'pipe:1', durationSec) {
  */
 function ottCopyArgs(url, out = 'pipe:1', durationSec) {
     return [
+        '-user_agent', BROWSER_UA,
         '-fflags', '+genpts+discardcorrupt',
         '-analyzeduration', '2000000',
         '-probesize', '2000000',
@@ -89,6 +95,7 @@ function ottArgs(url, out = 'pipe:1', durationSec) {
     if (process.env.OTT_TRANSCODE != '1') return ottCopyArgs(url, out, durationSec);
 
     return [
+        '-user_agent', BROWSER_UA,
         '-fflags', '+genpts',
         '-analyzeduration', '2000000',
         '-probesize', '2000000',
@@ -153,17 +160,17 @@ function pickBestVariant(text, baseUrl) {
 
 /**
  * Resolves an OTT master playlist to its best (highest-bitrate) variant, so the
- * stream doesn't get stuck on a low-res rendition. Best-effort: on any failure
- * (or a non-master playlist) it returns the original URL unchanged. Disable with
- * OTT_NO_VARIANT=1.
+ * stream doesn't get stuck on a low-res rendition. Opt-in via OTT_VARIANT=1
+ * (some CDNs don't serve the sub-variant URL cleanly). Best-effort: on any
+ * failure (or a non-master playlist) it returns the original URL unchanged.
  * @param {string} url
  * @returns {Promise<string>}
  */
 async function resolveBestVariant(url) {
-    if (process.env.OTT_NO_VARIANT == '1') return url;
+    if (process.env.OTT_VARIANT != '1') return url;
 
     try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA }, signal: AbortSignal.timeout(4000) });
 
         if (!res.ok) return url;
 
