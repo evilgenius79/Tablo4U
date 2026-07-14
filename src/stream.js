@@ -4,8 +4,8 @@
  * the browser as MPEG-TS (played client-side by mpegts.js):
  *   - OTA: request a watch session from the device (uses a tuner) and
  *     transcode MPEG-2/AC3 → H.264/AAC.
- *   - OTT: stream the lineup's direct URL (`ott.streamUrl`) — no device
- *     request, no tuner — and remux (or transcode) to MPEG-TS.
+ *   - OTT: request a watch session too (that's how the app plays OTT; the device
+ *     re-serves it as HD H.264) — no tuner — and remux (or transcode).
  * The arg builders and getPlaylistUrl are exported so the recorder reuses the
  * exact same pipeline, writing to a file instead of the response.
  * In MOCK mode it emits a test pattern so the player is demoable without a Tablo.
@@ -14,11 +14,6 @@
 const { spawn } = require('child_process');
 
 const tuners = require('./tuners');
-
-// Some OTT/FAST CDNs (e.g. Amagi) gate on User-Agent and reject ffmpeg's default
-// "Lavf/…" — which shows up as ffmpeg starting and dying instantly. Present as a
-// browser so the CDN serves the stream.
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 /**
  * ffmpeg args for a mock test pattern (color bars + tone).
@@ -69,7 +64,6 @@ function otaArgs(url, out = 'pipe:1', durationSec) {
  */
 function ottCopyArgs(url, out = 'pipe:1', durationSec) {
     return [
-        '-user_agent', BROWSER_UA,
         '-fflags', '+genpts+discardcorrupt',
         '-analyzeduration', '2000000',
         '-probesize', '2000000',
@@ -95,7 +89,6 @@ function ottArgs(url, out = 'pipe:1', durationSec) {
     if (process.env.OTT_TRANSCODE != '1') return ottCopyArgs(url, out, durationSec);
 
     return [
-        '-user_agent', BROWSER_UA,
         '-fflags', '+genpts',
         '-analyzeduration', '2000000',
         '-probesize', '2000000',
@@ -108,76 +101,6 @@ function ottArgs(url, out = 'pipe:1', durationSec) {
         ...(durationSec ? ['-t', String(durationSec)] : []),
         '-f', 'mpegts', '-flush_packets', '1', out
     ];
-}
-
-/**
- * Given an HLS master playlist body, returns the absolute URL of the
- * highest-bandwidth variant (so OTT plays HD instead of whatever ffmpeg picks
- * by default). Returns null if it isn't a master playlist / can't be parsed.
- * @param {string} text
- * @param {string} baseUrl
- * @returns {string|null}
- */
-function pickBestVariant(text, baseUrl) {
-    if (!text || !text.includes('#EXT-X-STREAM-INF')) return null;
-
-    const lines = text.split(/\r?\n/);
-
-    let best = null;
-
-    let bestBw = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-        const m = /#EXT-X-STREAM-INF:.*?BANDWIDTH=(\d+)/i.exec(lines[i]);
-
-        if (!m) continue;
-
-        // The variant URI is the next non-blank, non-comment line.
-        let j = i + 1;
-
-        while (j < lines.length && (lines[j].trim() === '' || lines[j].startsWith('#'))) j++;
-
-        const uri = lines[j] && lines[j].trim();
-
-        const bw = parseInt(m[1], 10);
-
-        if (uri && bw > bestBw) { bestBw = bw; best = uri; }
-    }
-
-    if (!best) return null;
-
-    try {
-        const abs = new URL(best, baseUrl);
-
-        // Carry the master's query (ad-macros) onto the variant if it has none.
-        if (!abs.search) { const q = new URL(baseUrl).search; if (q) abs.search = q; }
-
-        return abs.toString();
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Resolves an OTT master playlist to its best (highest-bitrate) variant, so the
- * stream doesn't get stuck on a low-res rendition. Opt-in via OTT_VARIANT=1
- * (some CDNs don't serve the sub-variant URL cleanly). Best-effort: on any
- * failure (or a non-master playlist) it returns the original URL unchanged.
- * @param {string} url
- * @returns {Promise<string>}
- */
-async function resolveBestVariant(url) {
-    if (process.env.OTT_VARIANT != '1') return url;
-
-    try {
-        const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA }, signal: AbortSignal.timeout(4000) });
-
-        if (!res.ok) return url;
-
-        return pickBestVariant(await res.text(), url) || url;
-    } catch {
-        return url;
-    }
 }
 
 /**
@@ -197,18 +120,17 @@ async function getPlaylistUrl(tablo, channelId) {
 }
 
 /**
- * Builds the ffmpeg args for a channel.
- *  - OTT: stream straight from the lineup's direct URL (`ott.streamUrl`) — no
- *    device round-trip, no tuner. (The URL works as-is, ad-macro placeholders
- *    and all.)
- *  - OTA: request a watch session from the device (a tuner) for the playlist.
+ * Builds the ffmpeg args for a channel. Both OTA and OTT stream through the
+ * device's /watch endpoint — that's how the official app plays OTT too (it does
+ * not play the lineup's direct Amagi URL server-side; that raw URL is only used
+ * for the opt-in client-side HLS path). The device re-serves OTT as a single
+ * H.264 rendition, so it's already HD. OTT just doesn't consume a tuner.
  *
  * @param {object} o
  * @param {boolean} o.mock
  * @param {import('./tablo').TabloClient|null} o.tablo
  * @param {string} o.channelId
  * @param {boolean} o.isOtt
- * @param {string} [o.ottUrl] direct OTT stream URL from the lineup
  * @param {string} [o.out]
  * @param {number} [o.durationSec]
  * @returns {Promise<string[]>}
@@ -216,19 +138,11 @@ async function getPlaylistUrl(tablo, channelId) {
 async function buildArgs(o) {
     if (o.mock) return mockArgs(o.out, o.durationSec);
 
-    if (o.isOtt) {
-        if (!o.ottUrl) throw new Error('no OTT stream URL in lineup');
-
-        const src = await resolveBestVariant(o.ottUrl);
-
-        return ottArgs(src, o.out, o.durationSec);
-    }
-
     if (!o.tablo) throw new Error('Tablo not connected');
 
     const url = await getPlaylistUrl(o.tablo, o.channelId);
 
-    return otaArgs(url, o.out, o.durationSec);
+    return o.isOtt ? ottArgs(url, o.out, o.durationSec) : otaArgs(url, o.out, o.durationSec);
 }
 
 /**
@@ -240,7 +154,6 @@ async function buildArgs(o) {
  * @param {boolean} opts.mock
  * @param {import('./tablo').TabloClient|null} opts.tablo
  * @param {(id:string)=>('ota'|'ott'|undefined)} opts.kindOf
- * @param {(id:string)=>(string|undefined)} [opts.ottUrlOf] direct OTT URL from the lineup
  * @param {(msg:string)=>void} [opts.log]
  */
 async function handleStream(req, res, opts) {
@@ -250,8 +163,7 @@ async function handleStream(req, res, opts) {
 
     const isOtt = opts.kindOf(channelId) === 'ott';
 
-    // Only OTA channels consume a physical tuner. OTT streams straight from the
-    // lineup URL — no device request, no tuner slot.
+    // Only OTA channels consume a physical tuner; OTT uses /watch too but no slot.
     const usesTuner = !isOtt && !opts.mock;
 
     // Reserve before the async watch so concurrent requests can't oversubscribe.
@@ -265,10 +177,7 @@ async function handleStream(req, res, opts) {
     let args;
 
     try {
-        args = await buildArgs({
-            mock: opts.mock, tablo: opts.tablo, channelId, isOtt,
-            ottUrl: isOtt && opts.ottUrlOf ? opts.ottUrlOf(channelId) : undefined
-        });
+        args = await buildArgs({ mock: opts.mock, tablo: opts.tablo, channelId, isOtt });
     } catch (err) {
         if (usesTuner) tuners.release();
 
@@ -321,4 +230,4 @@ async function handleStream(req, res, opts) {
     res.on('close', cleanup);
 }
 
-module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl, pickBestVariant, resolveBestVariant };
+module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl };
