@@ -28,6 +28,7 @@ const { TabloClient } = require('./tablo');
 const Auth = require('./auth');
 const { handleStream } = require('./stream');
 const recorder = require('./recorder');
+const scheduler = require('./scheduler');
 const tuners = require('./tuners');
 const mock = require('./mock');
 
@@ -409,7 +410,33 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
 // ---- DVR / recordings ----
 
 app.get('/api/recordings', requireAuth, (req, res) => {
-    res.json(recorder.list());
+    res.json({ ...recorder.list(), scheduled: scheduler.list() });
+});
+
+// Schedule a recording for a (future) program.
+app.post('/api/recordings/schedule', requireAuth, (req, res) => {
+    try {
+        const { channelId, title, startMs, durationSec } = req.body || {};
+
+        if (!channelId || !startMs) return res.status(400).json({ error: 'channelId and startMs required' });
+
+        const entry = scheduler.add({
+            channelId,
+            channelName: channelName.get(channelId) || (req.body || {}).channelName || channelId,
+            kind: channelKind.get(channelId) || (req.body || {}).kind,
+            title,
+            startMs: Number(startMs),
+            durationSec: Number(durationSec) || 3600
+        });
+
+        res.json({ ok: true, scheduled: entry });
+    } catch (err) {
+        res.status(409).json({ error: String(err && err.message || err) });
+    }
+});
+
+app.delete('/api/recordings/schedule/:id', requireAuth, (req, res) => {
+    res.json({ ok: scheduler.cancel(req.params.id) });
 });
 
 app.post('/api/recordings/start', requireAuth, async (req, res) => {
@@ -423,7 +450,7 @@ app.post('/api/recordings/start', requireAuth, async (req, res) => {
             tablo,
             channelId,
             channelName: channelName.get(channelId) || (req.body || {}).channelName || channelId,
-            kind: channelKind.get(channelId),
+            kind: channelKind.get(channelId) || (req.body || {}).kind,
             title,
             minutes: Math.max(1, Math.min(360, parseInt(minutes, 10) || 60)),
             log: (m) => console.log('[tablo4u] ' + m)
@@ -596,6 +623,20 @@ app.use(requireAuth, (req, res, next) => {
     } else {
         console.error('[tablo4u] No TABLO_EMAIL / TABLO_PASSWORD (and MOCK off). Data calls will error.');
     }
+
+    // DVR scheduler: fire a scheduled recording by starting a normal recording.
+    scheduler.setFire((entry) => recorder.start({
+        mock: MOCK,
+        tablo,
+        channelId: entry.channelId,
+        channelName: entry.channelName,
+        kind: entry.kind,
+        title: entry.title,
+        minutes: entry.minutes,
+        log: (m) => console.log('[tablo4u] (scheduled) ' + m)
+    }));
+
+    scheduler.start();
 
     app.listen(PORT, () => {
         console.log(`[tablo4u] Web UI on http://localhost:${PORT}${OPEN ? '  (open)' : '  (login required)'}`);

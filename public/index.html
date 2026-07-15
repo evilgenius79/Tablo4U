@@ -215,6 +215,7 @@
             <div class="phead">
                 <div class="title">Program</div>
                 <div class="spacer"></div>
+                <button class="ghost" id="dRecord" style="display:none">⏺ Record</button>
                 <button id="dWatch">▶ Watch</button>
                 <button class="ghost" id="dClose">Close</button>
             </div>
@@ -292,6 +293,7 @@
             </div>
             <div class="pbody">
                 <div class="note" id="dvrDest" style="margin-bottom:12px"></div>
+                <div id="dvrScheduled"></div>
                 <div id="dvrActive"></div>
                 <div id="dvrSaved"></div>
                 <div class="note" id="dvrMsg"></div>
@@ -551,7 +553,47 @@ function showDetail(ch, a) {
         + (a.genres && a.genres.length ? `<div class="chips">${a.genres.map(g => `<span class="chip">${esc(g)}</span>`).join('')}</div>` : '')
         + `<div class="desc">${esc(a.description || 'No description available.')}</div></div>`;
     $('#dWatch').onclick = () => { $('#detailModal').classList.remove('open'); watchChannel(ch, a); };
+
+    // Record button: schedule a future program, or record one that's on now.
+    const now = Date.now();
+    const rb = $('#dRecord');
+    if (end.getTime() <= now) {
+        rb.style.display = 'none';
+    } else if (start.getTime() > now) {
+        rb.style.display = ''; rb.textContent = '⏺ Schedule';
+        rb.onclick = () => scheduleAiring(ch, a);
+    } else {
+        rb.style.display = ''; rb.textContent = '● Record';
+        rb.onclick = () => { $('#detailModal').classList.remove('open'); openRecord(ch, a); };
+    }
+
     $('#detailModal').classList.add('open');
+}
+
+// Brief bottom toast for confirmations.
+function toast(msg) {
+    let t = $('#toast');
+    if (!t) {
+        t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t);
+        t.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:10000;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:10px 16px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.35);font-size:14px;max-width:90vw';
+    }
+    t.textContent = msg; t.style.display = 'block';
+    clearTimeout(t._timer); t._timer = setTimeout(() => { t.style.display = 'none'; }, 2800);
+}
+
+async function scheduleAiring(ch, a) {
+    const startMs = new Date(a.datetime).getTime();
+    const title = a.title || (a.show && a.show.title) || ch.name;
+    try {
+        const r = await fetch('/api/recordings/schedule', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channelId: ch.identifier, channelName: ch.name, kind: ch.kind, title, startMs, durationSec: a.duration || 3600 })
+        });
+        const j = await r.json();
+        if (!r.ok) { toast('Could not schedule: ' + (j.error || r.status)); return; }
+        $('#detailModal').classList.remove('open');
+        toast('Scheduled: ' + title);
+    } catch (e) { toast('Schedule failed: ' + e.message); }
 }
 
 // ---- player ----
@@ -756,7 +798,7 @@ $('#recStart').onclick = async () => {
     $('#recMsg').textContent = 'Starting…';
     try {
         const r = await fetch('/api/recordings/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channelId: recTarget.identifier, channelName: recTarget.name, title: $('#recName').value, minutes: parseInt($('#recMinutes').value, 10) || 60 }) });
+            body: JSON.stringify({ channelId: recTarget.identifier, channelName: recTarget.name, kind: recTarget.kind, title: $('#recName').value, minutes: parseInt($('#recMinutes').value, 10) || 60 }) });
         const j = await r.json();
         if (!r.ok) { $('#recMsg').textContent = j.error || 'Could not start recording'; return; }
         $('#recordModal').classList.remove('open');
@@ -837,6 +879,20 @@ function recRow(rec, active) {
     return el;
 }
 
+function schedRow(e) {
+    const el = document.createElement('div'); el.className = 'rec-row';
+    const when = new Date(e.startMs).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const tag = e.status === 'failed' ? ' · failed' : e.status === 'missed' ? ' · missed' : '';
+    const icon = e.status === 'scheduled' ? '🗓️' : '⚠️';
+    el.innerHTML = `<span style="font-size:16px">${icon}</span><div class="info"><div class="t">${esc(e.title)}</div><div class="s">${esc(e.channelName)} · ${esc(when)}${tag}</div></div>`;
+    const btn = document.createElement('button');
+    btn.className = e.status === 'scheduled' ? 'ghost' : 'del';
+    btn.textContent = e.status === 'scheduled' ? 'Cancel' : '🗑';
+    btn.onclick = async () => { await fetch('/api/recordings/schedule/' + e.id, { method: 'DELETE' }); refreshDvr(); };
+    el.appendChild(btn);
+    return el;
+}
+
 async function refreshDvr() {
     let d;
     try { d = await api('/api/recordings'); } catch (e) { $('#dvrMsg').textContent = e.message; return; }
@@ -850,6 +906,12 @@ async function refreshDvr() {
         const r = await fetch('/api/settings/recordings-dir', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: np }) });
         const j = await r.json(); if (!r.ok) $('#dvrMsg').textContent = j.error || 'Error'; else refreshDvr();
     };
+    // Scheduled (upcoming), plus recently missed/failed so they're not silent.
+    const SC = $('#dvrScheduled');
+    const sched = (d.scheduled || []).filter(e => ['scheduled', 'missed', 'failed'].includes(e.status)).sort((a, b) => a.startMs - b.startMs);
+    SC.innerHTML = sched.length ? '<div class="dvr-h">Scheduled</div>' : '';
+    for (const e of sched) SC.appendChild(schedRow(e));
+
     const A = $('#dvrActive'); A.innerHTML = d.active.length ? '<div class="dvr-h">Recording now</div>' : '';
     for (const rec of d.active) A.appendChild(recRow(rec, true));
     const S = $('#dvrSaved');

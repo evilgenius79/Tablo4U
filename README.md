@@ -37,11 +37,12 @@ laptop, phone, or TV browser without being locked into the official apps.
   **picture-in-picture**. OTT channels are remuxed cheaply (already H.264) and
   **don't occupy a tuner**; OTA channels (MPEG-2/AC3) use a tuner and are
   transcoded to H.264/AAC by ffmpeg so they play in any modern browser.
-- ⏺ **DVR / recording** — record any channel from the player's "● Rec" button,
-  either **to the server** (saved in the Recordings view to play back, download,
-  or delete) or **straight to the viewing computer** via a native Save dialog
-  (Chrome/Edge). Recordings and live streams share the real tuner count so they
-  can't oversubscribe the device (OTA only; OTT records without a tuner).
+- ⏺ **DVR / recording** — record any channel from the player's "● Rec" button
+  (**to the server** to play back/download/delete, or **straight to the viewing
+  computer** via a native Save dialog), **or schedule a future program** from
+  the guide — click any upcoming show → *Schedule*. Recordings and live streams
+  share the real tuner count so they can't oversubscribe the device, and
+  scheduling checks for **tuner conflicts** upfront (OTA only; OTT is tuner-free).
 - ⭐ **Favorites & recently watched** — star channels (filter to just those),
   and jump back to what you were watching — saved per user.
 - 🔎 **Search** the guide by channel or program, and click any program for a
@@ -222,7 +223,9 @@ Pick one:
 - [x] Tuner count auto-detected from the device (OTT channels tuner-free)
 - [x] DVR: record a channel to disk (instant), play back / download / delete,
       with shared tuner accounting
-- [ ] DVR: schedule recordings from the guide (click a future program)
+- [x] DVR: schedule recordings from the guide (click a future program), with
+      upfront tuner-conflict checks
+- [ ] HDHomeRun support alongside Tablo (direct-URL streaming + signal meter)
 - [ ] Program reminders / "watch later"
 
 ## Status
