@@ -22,17 +22,39 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Windows executable
         run: npm run build:win
 
-      - name: Bundle ffmpeg
+      - name: Bundle ffmpeg (checksum-verified)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Pin a specific BtbN release for reproducible builds by setting the
+          # repo variable FFMPEG_TAG to a dated tag (e.g. autobuild-2025-07-01-12-49).
+          # Defaults to the rolling 'latest'.
+          FFMPEG_TAG: ${{ vars.FFMPEG_TAG || 'latest' }}
+          FFMPEG_ASSET: ffmpeg-master-latest-win64-gpl.zip
         run: |
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          $rel = gh api "repos/BtbN/FFmpeg-Builds/releases/tags/$env:FFMPEG_TAG" | ConvertFrom-Json
+          $asset = $rel.assets | Where-Object { $_.name -eq $env:FFMPEG_ASSET } | Select-Object -First 1
+          if (-not $asset) { throw "ffmpeg asset '$env:FFMPEG_ASSET' not found in BtbN release '$env:FFMPEG_TAG'" }
+          Write-Host "ffmpeg: $($asset.name) from tag $env:FFMPEG_TAG"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
+          $sha = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Downloaded SHA256: $sha"
+          # Verify against GitHub's published asset digest.
+          if ($asset.digest) {
+            $expected = ($asset.digest -replace '^sha256:', '').ToLower()
+            if ($sha -ne $expected) { throw "ffmpeg checksum mismatch: got $sha, expected $expected" }
+            Write-Host "Checksum verified against GitHub-published digest."
+          } else {
+            Write-Host "::warning::No published digest for this asset; skipping verification."
+          }
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extract -Force
           $ff = Get-ChildItem -Path ffmpeg_extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           if (-not $ff) { throw "ffmpeg.exe not found in download" }
