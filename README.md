@@ -2,6 +2,12 @@
 
 **Watch your Tablo in any browser — no Plex required.**
 
+> 💡 **Tablo4U was the idea of [HearHellacopters](https://github.com/hearhellacopters),
+> the author of [tablo2plex](https://github.com/hearhellacopters/tablo2plex)** —
+> a native web front-end for Tablo 4th Gen, built on the same reverse-engineered
+> API work. This project exists thanks to that idea and the API groundwork from
+> tablo2plex.
+
 Tablo4U is a self-hosted web app that talks to a **Tablo 4th Gen** device using
 Tablo's *own JSON API*. It gives you a real channel guide and an in-browser
 live player, with multi-user logins — so you can watch OTA (and OTT) TV from a

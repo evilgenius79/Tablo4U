@@ -727,9 +727,15 @@ async function openRecord(ch, airing) {
 function updateRecDestNote() {
     const sel = $('#recDestSel') ? $('#recDestSel').value : 'server';
     if (sel === 'pc') {
-        $('#recDest').textContent = window.showSaveFilePicker
-            ? 'A "Save as" dialog opens; the recording streams to that file until you stop it.'
-            : "This browser can't save directly to your computer — use Chrome/Edge, or pick Server.";
+        if (!window.showSaveFilePicker) {
+            $('#recDest').textContent = "This browser can't save directly to your computer — use Chrome/Edge, or pick Server.";
+            return;
+        }
+        let msg = 'A "Save as" dialog opens; the recording streams to that file until you stop it.';
+        // Recording to the PC opens its own stream, so an OTA channel uses a
+        // second tuner for the duration (on top of whatever you're watching).
+        if (recTarget && recTarget.kind === 'ota') msg += ' Heads up: this uses a second tuner while it records (OTA channels only).';
+        $('#recDest').textContent = msg;
     } else {
         $('#recDest').textContent = recDir ? ('Saves to: ' + recDir) : '';
     }
