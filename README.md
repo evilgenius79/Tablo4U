@@ -116,11 +116,13 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 | `TABLO_SERVER_ID` | first device | Pick a specific device if you have more than one |
 | `HDHR_URL` | — | Optional HDHomeRun base URL (e.g. `http://10.0.0.50`) to add its channels + signal meter |
 | `ADMIN_PASSWORD` | random | Admin password. Set it and it **always wins** — the admin login is (re)set to it on every start. Leave unset and a random one is generated + printed on first run. |
+| `OPEN` | off | Set `OPEN=1` to disable login for watching (LAN convenience). Admin actions still need an admin sign-in. |
 | `PORT` | `3400` | Web UI port |
 | `RECORDINGS_DIR` | `./recordings` | Where DVR recordings are saved (a folder on the server; also changeable in-app) |
-| `OPEN` | off | Set `OPEN=1` to disable login (LAN convenience) |
+| `RECORDINGS_ROOT` | app folder | Allowlist root — admin “Change folder” cannot escape this path. Set to an external drive mount if recordings live outside the app folder. |
 | `MOCK` | off | Set `MOCK=1` for sample data + test-pattern stream |
 | `SESSION_SECRET` | random | Set a fixed value so sessions survive restarts |
+| `SECURE_COOKIES` | off | Set `SECURE_COOKIES=1` behind HTTPS so the session cookie is Secure |
 
 > The **tuner count is read from the device** after login (`/server/info`), not
 > from config — so it's always correct and there's no `TUNER_COUNT` to set.
@@ -175,10 +177,13 @@ All endpoints require a session (unless `OPEN=1`):
 ## Security
 
 - This server fronts your Tablo, so treat access to it like access to your
-  device. On a trusted LAN you can even run it open (`OPEN=1`); anywhere else,
-  keep sign-in **on**.
+  device. On a trusted LAN you can even run it open (`OPEN=1`) for watching;
+  anywhere else, keep sign-in **on**. `OPEN=1` no longer grants admin powers —
+  changing the recordings folder, managing users, and the device probe still
+  require an admin session.
 - Passwords are scrypt-hashed; `data/users.json` is written owner-only.
 - Set `SESSION_SECRET` in production so sessions persist and aren't guessable.
+- Behind HTTPS, set `SECURE_COOKIES=1` (and usually `TRUST_PROXY=1`).
 - Never expose it to the internet with `OPEN=1` — that would let anyone who
   finds the URL stream your tuners.
 
@@ -195,6 +200,8 @@ Pick one:
   - Keep **login on** (do **not** set `OPEN=1`) and use a **strong
     `ADMIN_PASSWORD`**.
   - Set a fixed **`SESSION_SECRET`** so logins survive restarts.
+  - Set **`SECURE_COOKIES=1`** (and **`TRUST_PROXY=1`**) so the session
+    cookie is marked Secure behind the proxy.
   - Terminate **TLS** at the proxy (a real certificate — e.g. via Let's Encrypt).
 
   Minimal [Caddy](https://caddyserver.com/) example (automatic HTTPS):

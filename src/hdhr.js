@@ -24,6 +24,27 @@ async function getJson(url, timeoutMs = 5000) {
     return res.json();
 }
 
+/**
+ * True if `candidate` is http(s) under the same origin as `baseUrl`.
+ * Prevents a poisoned discover/lineup response from sending fetches/ffmpeg
+ * off-LAN (or to file:/other schemes).
+ *
+ * @param {string} baseUrl
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+function sameOriginHttp(baseUrl, candidate) {
+    try {
+        const base = new URL(baseUrl);
+
+        const u = new URL(candidate, base);
+
+        return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === base.origin;
+    } catch {
+        return false;
+    }
+}
+
 class HdhrClient {
     /** @param {string} baseUrl e.g. http://10.0.0.50 */
     constructor(baseUrl) {
@@ -52,7 +73,12 @@ class HdhrClient {
      * @returns {Promise<any[]>}
      */
     async getChannels() {
-        const lineupUrl = (this.info && this.info.LineupURL) || (this.baseUrl + '/lineup.json');
+        // Prefer LineupURL from discover, but only if it stays on this device.
+        let lineupUrl = this.baseUrl + '/lineup.json';
+
+        if (this.info && this.info.LineupURL && sameOriginHttp(this.baseUrl, this.info.LineupURL)) {
+            lineupUrl = this.info.LineupURL;
+        }
 
         const lineup = await getJson(lineupUrl);
 
@@ -61,13 +87,14 @@ class HdhrClient {
         this.urls.clear();
 
         return lineup
-            .filter(c => c && c.GuideNumber && c.URL && !c.DRM)
+            .filter(c => c && c.GuideNumber && c.URL && !c.DRM && sameOriginHttp(this.baseUrl, c.URL))
             .map(c => {
                 const [maj, min] = String(c.GuideNumber).split('.');
 
                 const identifier = 'hdhr:' + c.GuideNumber;
 
-                this.urls.set(identifier, c.URL);
+                // Resolve relative URLs against the device base so ffmpeg gets an absolute http URL.
+                this.urls.set(identifier, new URL(c.URL, this.baseUrl).toString());
 
                 return {
                     identifier,

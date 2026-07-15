@@ -21,10 +21,22 @@ const FILE = path.join(DATA_DIR, 'schedule.json');
 // Record a bit past the listed end so overruns (sports, live TV) aren't cut off.
 const POST_PAD_SEC = 120;
 
+/** Max duration for a single scheduled recording (6 hours), matching instant-record cap. */
+const MAX_DURATION_SEC = 6 * 60 * 60;
+
+/** Soft cap on how many schedule entries may exist at once. */
+const MAX_SCHEDULED = Math.max(10, parseInt(process.env.MAX_SCHEDULED || '100', 10) || 100);
+
 /** @type {(entry:any)=>Promise<any>} */
 let fireFn = null;
 
+/** @type {(() => {channelId:string, kind:string, startMs:number, endMs:number}[]) | null} */
+let busyFn = null;
+
 let sweepTimer = null;
+
+/** Prevent overlapping sweeps from double-firing the same entry. */
+let sweeping = false;
 
 function load() {
     try { const a = JSON.parse(fs.readFileSync(FILE, 'utf8')); return Array.isArray(a) ? a : []; }
@@ -33,7 +45,9 @@ function load() {
 
 function save(list) {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
+    const tmp = FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(list, null, 2));
+    fs.renameSync(tmp, FILE);
 }
 
 /** Which tuner pool a schedule draws from — HDHR and Tablo are separate. */
@@ -44,27 +58,37 @@ function poolOf(entry) {
 /**
  * Max number of OTA schedules in one tuner pool that overlap at any instant
  * within [start,end). OTT schedules use no tuner and are ignored, and only
- * schedules in the same pool count against each other.
+ * schedules in the same pool count against each other. Optional `extra` busy
+ * windows (e.g. already-recording sessions) are included.
  * @param {number} start
  * @param {number} end
  * @param {any[]} list
  * @param {string} poolName
+ * @param {{channelId?:string, kind?:string, startMs:number, endMs:number}[]} [extra]
  * @returns {number}
  */
-function maxOverlap(start, end, list, poolName) {
+function maxOverlap(start, end, list, poolName, extra = []) {
     const events = [];
 
-    for (const e of list) {
-        if (e.kind === 'ott' || e.status !== 'scheduled') continue;
+    const consider = (e) => {
+        if (e.kind === 'ott') return;
 
-        if (poolOf(e) !== poolName) continue;
+        if (poolOf(e) !== poolName) return;
 
-        if (e.endMs <= start || e.startMs >= end) continue; // no overlap with window
+        if (e.endMs <= start || e.startMs >= end) return; // no overlap with window
 
         events.push([Math.max(e.startMs, start), 1]);
 
         events.push([Math.min(e.endMs, end), -1]);
+    };
+
+    for (const e of list) {
+        if (e.status !== 'scheduled' && e.status !== 'recording') continue;
+
+        consider(e);
     }
+
+    for (const e of extra) consider(e);
 
     events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 
@@ -80,6 +104,9 @@ function maxOverlap(start, end, list, poolName) {
 const Scheduler = {
     /** @param {(entry:any)=>Promise<any>} fn called to actually start a recording */
     setFire(fn) { fireFn = fn; },
+
+    /** Optional: returns currently-busy OTA windows from the recorder. */
+    setBusy(fn) { busyFn = fn; },
 
     /** @returns {any[]} */
     list() { return load(); },
@@ -98,7 +125,7 @@ const Scheduler = {
     add(o) {
         const startMs = Number(o.startMs);
 
-        const durationSec = Math.max(60, Math.round(o.durationSec || 3600));
+        const durationSec = Math.min(MAX_DURATION_SEC, Math.max(60, Math.round(o.durationSec || 3600)));
 
         const endMs = startMs + (durationSec + POST_PAD_SEC) * 1000;
 
@@ -106,11 +133,20 @@ const Scheduler = {
 
         const list = load();
 
-        // Upfront OTA tuner-conflict check, per pool (HDHR vs Tablo).
+        const pending = list.filter(e => e.status === 'scheduled' || e.status === 'recording').length;
+
+        if (pending >= MAX_SCHEDULED) {
+            throw new Error(`too many scheduled recordings (max ${MAX_SCHEDULED})`);
+        }
+
+        // Upfront OTA tuner-conflict check, per pool (HDHR vs Tablo), including
+        // recordings already in flight.
         if (o.kind !== 'ott') {
             const poolName = poolOf(o);
 
-            const concurrent = maxOverlap(startMs, endMs, list, poolName) + 1; // +1 for this one
+            const busy = busyFn ? busyFn() : [];
+
+            const concurrent = maxOverlap(startMs, endMs, list, poolName, busy) + 1; // +1 for this one
 
             if (concurrent > tuners.getLimit(poolName)) {
                 const label = poolName === 'hdhr' ? 'HDHomeRun' : 'Tablo';
@@ -173,29 +209,37 @@ const Scheduler = {
 
     /** Fire anything due; mark anything whose window fully passed as missed. */
     async sweep() {
-        const now = Date.now();
+        if (sweeping) return;
 
-        const list = load();
+        sweeping = true;
 
-        for (const e of list) {
-            if (e.status !== 'scheduled') continue;
+        try {
+            const now = Date.now();
 
-            if (now >= e.endMs) { Scheduler._finish(e.id, 'missed'); continue; }
+            const list = load();
 
-            if (now >= e.startMs && fireFn) {
-                // Mark first so a slow fire isn't double-triggered by the next sweep.
-                Scheduler._finish(e.id, 'recording');
+            for (const e of list) {
+                if (e.status !== 'scheduled') continue;
 
-                const remainingSec = Math.max(60, Math.round((e.endMs - now) / 1000));
+                if (now >= e.endMs) { Scheduler._finish(e.id, 'missed'); continue; }
 
-                try {
-                    const rec = await fireFn({ ...e, minutes: remainingSec / 60 });
+                if (now >= e.startMs && fireFn) {
+                    // Mark first so a slow fire isn't double-triggered by the next sweep.
+                    Scheduler._finish(e.id, 'recording');
 
-                    Scheduler._finish(e.id, 'recording', { recordingId: rec && rec.id });
-                } catch (err) {
-                    Scheduler._finish(e.id, 'failed', { error: String(err && err.message || err) });
+                    const remainingSec = Math.max(60, Math.min(MAX_DURATION_SEC, Math.round((e.endMs - now) / 1000)));
+
+                    try {
+                        const rec = await fireFn({ ...e, minutes: remainingSec / 60 });
+
+                        Scheduler._finish(e.id, 'recording', { recordingId: rec && rec.id });
+                    } catch (err) {
+                        Scheduler._finish(e.id, 'failed', { error: String(err && err.message || err) });
+                    }
                 }
             }
+        } finally {
+            sweeping = false;
         }
     },
 

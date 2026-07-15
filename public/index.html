@@ -1000,8 +1000,8 @@ $('#uAdd').onclick = async () => {
     const me = await fetch('/api/me').then(r => r.json()).catch(() => ({}));
     if (!me.open) $('#logout').style.display = '';
     CONFIG.ottDirectHls = !!me.ottDirectHls;
-    isAdmin = !!(me.user && me.user.role === 'admin') || !!me.open;
-    if (me.user && me.user.role === 'admin') $('#usersBtn').style.display = '';
+    isAdmin = !!(me.user && me.user.role === 'admin');
+    if (isAdmin) $('#usersBtn').style.display = '';
     setToday(); await load();
 })();
 </script>

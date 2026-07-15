@@ -21,15 +21,31 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
  * @property {string} hash
  * @property {'admin'|'user'} role
  * @property {string} createdAt
+ * @property {string[]} [favorites]
+ * @property {{id:string, at:number}[]} [recent]
  */
+
+/** @type {User[]|null} in-memory mirror so hot paths don't hit disk every call. */
+let cache = null;
+
+/** Dummy salt/hash so missing-user login still pays scrypt cost (timing). */
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
+
+const DUMMY_HASH = crypto.scryptSync('dummy-password-for-timing', DUMMY_SALT, 64).toString('hex');
 
 /** @returns {User[]} */
 function load() {
+    if (cache) return cache;
+
     try {
-        return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+        const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+
+        cache = Array.isArray(data) ? data : [];
     } catch {
-        return [];
+        cache = [];
     }
+
+    return cache;
 }
 
 /** @param {User[]} users */
@@ -38,7 +54,14 @@ function save(users) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
     }
 
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), { mode: 0o600 });
+    cache = users;
+
+    // Atomic-ish write: temp + rename reduces torn reads under concurrency.
+    const tmp = USERS_FILE + '.tmp';
+
+    fs.writeFileSync(tmp, JSON.stringify(users, null, 2), { mode: 0o600 });
+
+    fs.renameSync(tmp, USERS_FILE);
 }
 
 /**
@@ -153,11 +176,15 @@ const Auth = {
 
         const user = load().find(u => u.username === username);
 
-        if (!user) {
-            return null;
-        }
+        // Always run scrypt (dummy for unknown usernames) so login timing doesn't
+        // reveal whether the account exists.
+        const salt = user ? user.salt : DUMMY_SALT;
 
-        return safeEq(user.hash, hashPw(password, user.salt)) ? user : null;
+        const expected = user ? user.hash : DUMMY_HASH;
+
+        const ok = safeEq(expected, hashPw(password, salt));
+
+        return (user && ok) ? user : null;
     },
 
     /** @returns {{username:string, role:string, createdAt:string}[]} */

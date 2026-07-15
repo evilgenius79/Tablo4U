@@ -56,6 +56,33 @@ const guideCache = new Map();
 
 const GUIDE_TTL = 5 * 60 * 1000;
 
+/** Keep at most this many distinct guide dates in memory. */
+const GUIDE_CACHE_MAX = 8;
+
+/** YYYY-MM-DD only — rejects path-traversal-ish values before they hit Tablo. */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * @param {string} date
+ * @param {any} data
+ */
+function setGuideCache(date, data) {
+    guideCache.set(date, { at: Date.now(), data });
+
+    if (guideCache.size <= GUIDE_CACHE_MAX) return;
+
+    // Evict oldest by stamp.
+    let oldestKey = null;
+
+    let oldestAt = Infinity;
+
+    for (const [k, v] of guideCache) {
+        if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+    }
+
+    if (oldestKey != null) guideCache.delete(oldestKey);
+}
+
 // channel_identifier -> resolution ("hd_1080"|"sd"|…), from the device. Warmed
 // in the background (177 per-channel device requests) since the cloud lineup
 // doesn't carry it. Refreshed lazily once past the TTL.
@@ -180,7 +207,7 @@ async function getGuideForDate(date) {
         out[ch.identifier] = byNum[k.major + '.' + k.minor] || [];
     }
 
-    guideCache.set(date, { at: Date.now(), data: out });
+    setGuideCache(date, out);
 
     return out;
 }
@@ -249,13 +276,25 @@ loadStatic();
 
 const app = express();
 
-app.use(express.json());
+// Needed so Secure cookies / req.secure work behind a reverse proxy (Caddy/nginx).
+if (process.env.TRUST_PROXY == '1' || process.env.SECURE_COOKIES == '1') {
+    app.set('trust proxy', 1);
+}
+
+app.use(express.json({ limit: '64kb' }));
+
+const secureCookies = process.env.SECURE_COOKIES == '1';
 
 app.use(session({
     secret: process.env.SESSION_SECRET || crypto.randomBytes(16).toString('hex'),
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 }
+    cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: secureCookies,
+        maxAge: 7 * 24 * 60 * 60 * 1000
+    }
 }));
 
 // ---- auth middleware ----
@@ -272,8 +311,10 @@ function requireAuth(req, res, next) {
 
 /** @type {express.RequestHandler} */
 function requireAdmin(req, res, next) {
+    // OPEN only skips login for watching — never elevates to admin. Otherwise
+    // anyone on the LAN could change recordingsDir / probe the device / manage users.
     // @ts-ignore
-    if (OPEN || (req.session && req.session.user && req.session.user.role === 'admin')) return next();
+    if (req.session && req.session.user && req.session.user.role === 'admin') return next();
 
     return res.status(403).json({ error: 'admin only' });
 }
@@ -344,6 +385,10 @@ app.get('/api/channels', requireAuth, async (req, res) => {
 app.get('/api/guide', requireAuth, async (req, res) => {
     const date = String(req.query.date || new Date().toISOString().slice(0, 10));
 
+    if (!DATE_RE.test(date)) {
+        return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
     try {
         res.json({ date, guide: await getGuideForDate(date) });
     } catch (err) {
@@ -356,10 +401,21 @@ app.get('/api/guide', requireAuth, async (req, res) => {
 // Tablo 4th Gen exposes (e.g. per-channel signal strength — not present in the
 // cloud lineup/guide we normally use). Admin-only since the site may be public.
 app.get('/api/device/probe', requireAuth, requireAdmin, async (req, res) => {
+    // Validate ?path= before the Tablo-connected check so bad inputs get a clear
+    // 400 even in MOCK / disconnected mode.
+    if (req.query.path) {
+        const p = String(req.query.path);
+
+        if (!p.startsWith('/') || p.startsWith('//')) {
+            return res.status(400).json({ error: 'path must be a root-relative device path' });
+        }
+    }
+
     if (!tablo) return res.status(502).json({ error: 'Tablo not connected' });
 
     // ?path=/guide/channels/180 — fetch any single device path raw, so we can
-    // keep digging without rebuilding the exe.
+    // keep digging without rebuilding the exe. Absolute / protocol-relative
+    // URLs are also rejected inside TabloClient.deviceReq (SSRF + DeviceKey leak).
     if (req.query.path) {
         const p = String(req.query.path);
 
@@ -523,9 +579,11 @@ app.delete('/api/recordings/:id', requireAuth, (req, res) => {
 app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
     const rec = recorder.get(req.params.id);
 
-    if (!rec || !rec.file || !fs.existsSync(rec.file)) return res.status(404).send('not found');
+    const file = recorder.resolveFile(rec);
 
-    const size = fs.statSync(rec.file).size;
+    if (!rec || !file || !fs.existsSync(file)) return res.status(404).send('not found');
+
+    const size = fs.statSync(file).size;
 
     res.setHeader('Content-Type', 'video/mp2t');
 
@@ -554,11 +612,11 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
         res.setHeader('Content-Range', `bytes ${startB}-${endB}/${size}`);
         res.setHeader('Content-Length', endB - startB + 1);
 
-        fs.createReadStream(rec.file, { start: startB, end: endB }).pipe(res);
+        fs.createReadStream(file, { start: startB, end: endB }).pipe(res);
     } else {
         res.setHeader('Content-Length', size);
 
-        fs.createReadStream(rec.file).pipe(res);
+        fs.createReadStream(file).pipe(res);
     }
 });
 
@@ -616,6 +674,11 @@ function sendStatic(res, url) {
 
     res.set('Content-Type', asset.type);
 
+    // Vendor libs rarely change within a release — let browsers cache them.
+    if (url.startsWith('/vendor/')) {
+        res.set('Cache-Control', 'public, max-age=86400');
+    }
+
     res.send(asset.body);
 
     return true;
@@ -638,24 +701,29 @@ app.use(requireAuth, (req, res, next) => {
 // ---- boot ----
 
 (async function start() {
-    if (!OPEN) {
-        if (process.env.ADMIN_PASSWORD) {
-            // ADMIN_PASSWORD always wins: create the admin with it, or reset the
-            // existing admin's password to it on every start.
-            const seed = Auth.ensureAdmin(process.env.ADMIN_PASSWORD);
+    // Always ensure an admin exists — even in OPEN mode — so privileged actions
+    // (recordings folder, user admin, device probe) remain available after login.
+    // OPEN only skips auth for watching; it no longer elevates anonymous clients.
+    if (process.env.ADMIN_PASSWORD) {
+        // ADMIN_PASSWORD always wins: create the admin with it, or reset the
+        // existing admin's password to it on every start.
+        const seed = Auth.ensureAdmin(process.env.ADMIN_PASSWORD);
 
-            if (!seed.created) Auth.setPassword('admin', process.env.ADMIN_PASSWORD);
-        } else {
-            // No ADMIN_PASSWORD set: generate one on first run and print it.
-            const seed = Auth.ensureAdmin();
+        if (!seed.created) Auth.setPassword('admin', process.env.ADMIN_PASSWORD);
+    } else {
+        // No ADMIN_PASSWORD set: generate one on first run and print it.
+        const seed = Auth.ensureAdmin();
 
-            if (seed.created) {
-                console.log('[tablo4u] ----------------------------------------------');
-                console.log(`[tablo4u] Created admin account:  ${seed.username} / ${seed.password}`);
-                console.log('[tablo4u] (set ADMIN_PASSWORD in .env to choose your own)');
-                console.log('[tablo4u] ----------------------------------------------');
-            }
+        if (seed.created) {
+            console.log('[tablo4u] ----------------------------------------------');
+            console.log(`[tablo4u] Created admin account:  ${seed.username} / ${seed.password}`);
+            console.log('[tablo4u] (set ADMIN_PASSWORD in .env to choose your own)');
+            console.log('[tablo4u] ----------------------------------------------');
         }
+    }
+
+    if (OPEN) {
+        console.log('[tablo4u] OPEN=1 — login not required for watching. Admin actions still need an admin sign-in.');
     }
 
     if (MOCK) {
@@ -717,6 +785,8 @@ app.use(requireAuth, (req, res, next) => {
         minutes: entry.minutes,
         log: (m) => console.log('[tablo4u] (scheduled) ' + m)
     }));
+
+    scheduler.setBusy(() => recorder.activeWindows());
 
     scheduler.start();
 

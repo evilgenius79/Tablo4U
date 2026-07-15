@@ -15,6 +15,11 @@ const { spawn } = require('child_process');
 
 const tuners = require('./tuners');
 
+/** Soft cap on concurrent live ffmpeg processes that don't use a physical tuner (OTT / mock). */
+const MAX_NON_TUNER = Math.max(1, parseInt(process.env.MAX_NON_TUNER_FFMPEG || '4', 10) || 4);
+
+let nonTunerLive = 0;
+
 /**
  * ffmpeg args for a mock test pattern (color bars + tone).
  * @param {string} [out] output target (default the stdout pipe)
@@ -185,6 +190,16 @@ async function handleStream(req, res, opts) {
         return;
     }
 
+    if (!usesTuner) {
+        if (nonTunerLive >= MAX_NON_TUNER) {
+            res.status(503).send('Too many concurrent streams — try again later.');
+
+            return;
+        }
+
+        nonTunerLive += 1;
+    }
+
     /** @type {string[]} */
     let args;
 
@@ -192,6 +207,7 @@ async function handleStream(req, res, opts) {
         args = await buildArgs({ mock: opts.mock, tablo: opts.tablo, channelId, isOtt, hdhrUrl });
     } catch (err) {
         if (usesTuner) tuners.release(poolName);
+        else nonTunerLive = Math.max(0, nonTunerLive - 1);
 
         res.status(502).send('stream failed: ' + (err && err.message || err));
 
@@ -210,6 +226,7 @@ async function handleStream(req, res, opts) {
         done = true;
 
         if (usesTuner) tuners.release(poolName);
+        else nonTunerLive = Math.max(0, nonTunerLive - 1);
 
         ffmpeg.kill('SIGKILL');
 

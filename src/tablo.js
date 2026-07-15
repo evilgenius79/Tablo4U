@@ -145,6 +145,31 @@ class TabloClient {
     }
 
     /**
+     * Restricts `path` to a same-origin root-relative device path. Absolute
+     * (`http://…`) and protocol-relative (`//…`) inputs would otherwise replace
+     * the device host via `new URL(path, base)` — SSRF that also leaks the
+     * device Authorization header to an attacker-controlled host.
+     *
+     * @param {string} path
+     * @returns {string} pathname only (signing uses path-without-query)
+     */
+    safeDevicePath(path) {
+        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+            throw new Error('device path must be root-relative');
+        }
+
+        const base = new URL(this.device.url);
+
+        const url = new URL(path, base);
+
+        if (url.origin !== base.origin) {
+            throw new Error('refusing off-device URL');
+        }
+
+        return url.pathname;
+    }
+
+    /**
      * Signed request against the selected Tablo device (LAN, http).
      *
      * @param {string} method
@@ -157,6 +182,9 @@ class TabloClient {
             throw new Error('not logged in');
         }
 
+        // Pathname only — signing omits query; we always append ?lh ourselves.
+        const safePath = this.safeDevicePath(path);
+
         const msg = body != undefined ? JSON.stringify(body) : '';
 
         const date = deviceDate();
@@ -166,7 +194,7 @@ class TabloClient {
             'Date': date,
             'Accept': '*/*',
             'User-Agent': DEVICE_UA,
-            'Authorization': deviceAuth(method, path, msg, date)
+            'Authorization': deviceAuth(method, safePath, msg, date)
         };
 
         if (method == 'POST') {
@@ -175,7 +203,7 @@ class TabloClient {
 
         // device.url is like http://10.0.0.220:8887 ; keep the ?lh param the
         // official client uses
-        const url = new URL(path, this.device.url);
+        const url = new URL(safePath, this.device.url);
 
         url.search = 'lh';
 
@@ -335,7 +363,11 @@ class TabloClient {
      * @returns {Promise<any[]>}
      */
     async getChannelGuide(channelId, date) {
-        const data = await this.cloud('GET', `/api/v2/account/guide/channels/${channelId}/airings/${date}/`, undefined, {
+        const id = encodeURIComponent(String(channelId || ''));
+
+        const d = encodeURIComponent(String(date || ''));
+
+        const data = await this.cloud('GET', `/api/v2/account/guide/channels/${id}/airings/${d}/`, undefined, {
             Authorization: this.authorization,
             Lighthouse: this.lighthouse
         });
@@ -350,6 +382,11 @@ class TabloClient {
      * @returns {Promise<{playlist_url?:string, error?:any, [k:string]:any}>}
      */
     async watch(channelId) {
+        // Only allow safe path segments so a crafted id can't escape /guide/channels/.
+        if (!/^[A-Za-z0-9._:-]+$/.test(String(channelId || ''))) {
+            throw new Error('invalid channel id');
+        }
+
         const body = {
             bandwidth: null,
             extra: {

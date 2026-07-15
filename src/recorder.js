@@ -21,6 +21,11 @@ const DATA_DIR = path.join(baseDir(), 'data');
 const INDEX_FILE = path.join(DATA_DIR, 'recordings.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
+/** Soft cap on concurrent ffmpeg processes that don't use a physical tuner (OTT / mock). */
+const MAX_NON_TUNER = Math.max(1, parseInt(process.env.MAX_NON_TUNER_FFMPEG || '4', 10) || 4);
+
+let nonTunerCount = 0;
+
 /** id -> { proc, meta } for in-flight recordings. */
 const active = new Map();
 
@@ -37,16 +42,61 @@ function readJson(file, fallback) {
 
 function writeJson(file, data) {
     ensureDir(path.dirname(file));
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, file);
+}
+
+/**
+ * Root under which recordings must live. RECORDINGS_ROOT overrides; otherwise
+ * anything under the app/exe folder (baseDir) is allowed — so the default
+ * ./recordings and sibling folders work without extra config. Point
+ * RECORDINGS_ROOT at an external drive (e.g. /mnt/media) when recordings live
+ * outside the app folder.
+ * @returns {string}
+ */
+function recordingsRoot() {
+    const root = process.env.RECORDINGS_ROOT || baseDir();
+
+    return path.resolve(root);
+}
+
+/**
+ * Resolve `dir` and require it to stay under recordingsRoot().
+ * @param {string} dir
+ * @returns {string}
+ */
+function containDir(dir) {
+    const root = recordingsRoot();
+
+    const resolved = path.resolve(dir);
+
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        throw new Error('recordings folder must be under ' + root);
+    }
+
+    return resolved;
+}
+
+/** Default recordings folder: ./recordings under the app, or RECORDINGS_ROOT itself. */
+function defaultDir() {
+    const underApp = path.join(baseDir(), 'recordings');
+
+    try { return containDir(underApp); } catch { return recordingsRoot(); }
 }
 
 /** @returns {string} the configured recordings directory. */
 function getDir() {
     const cfg = readJson(CONFIG_FILE, {});
 
-    const dir = cfg.recordingsDir || process.env.RECORDINGS_DIR || path.join(baseDir(), 'recordings');
+    const dir = cfg.recordingsDir || process.env.RECORDINGS_DIR || defaultDir();
 
-    return dir;
+    try {
+        return containDir(dir);
+    } catch {
+        // Misconfigured/persisted path outside the allowlist — fall back safely.
+        return defaultDir();
+    }
 }
 
 /** @param {string} dir */
@@ -55,15 +105,17 @@ function setDir(dir) {
 
     if (!dir) throw new Error('folder required');
 
-    ensureDir(dir); // fails early if the path is invalid / not creatable
+    const resolved = containDir(dir);
+
+    ensureDir(resolved); // fails early if the path is invalid / not creatable
 
     const cfg = readJson(CONFIG_FILE, {});
 
-    cfg.recordingsDir = dir;
+    cfg.recordingsDir = resolved;
 
     writeJson(CONFIG_FILE, cfg);
 
-    return dir;
+    return resolved;
 }
 
 /** @returns {any[]} persisted recording metadata (newest first). */
@@ -99,6 +151,28 @@ function stamp(d) {
 }
 
 /**
+ * Absolute path for a recording file, always under getDir(). Prefers the
+ * basename stored as `name` so a tampered `file` field in JSON can't LFI.
+ * @param {any} rec
+ * @returns {string|null}
+ */
+function resolveFile(rec) {
+    if (!rec) return null;
+
+    const name = path.basename(String(rec.name || rec.file || ''));
+
+    if (!name || name === '.' || name === '..') return null;
+
+    const root = getDir();
+
+    const file = path.resolve(root, name);
+
+    if (file !== root && !file.startsWith(root + path.sep)) return null;
+
+    return file;
+}
+
+/**
  * Starts a recording.
  *
  * @param {object} o
@@ -126,6 +200,16 @@ async function start(o) {
         throw new Error('All tuners are in use — cannot start recording.');
     }
 
+    // OTT/mock don't share the physical tuner pool — enforce a separate ceiling
+    // so one user can't spawn unbounded ffmpeg processes.
+    if (!usesTuner) {
+        if (nonTunerCount >= MAX_NON_TUNER) {
+            throw new Error('Too many concurrent non-tuner recordings — try again later.');
+        }
+
+        nonTunerCount += 1;
+    }
+
     const durationSec = Math.max(1, Math.round((o.minutes || 60) * 60));
 
     const dir = getDir();
@@ -145,6 +229,7 @@ async function start(o) {
         args = await buildArgs({ mock: o.mock, tablo: o.tablo, channelId: o.channelId, isOtt, hdhrUrl: o.hdhrUrl, out: file, durationSec });
     } catch (err) {
         if (usesTuner) tuners.release(poolName);
+        else nonTunerCount = Math.max(0, nonTunerCount - 1);
 
         throw new Error('stream failed: ' + (err && err.message || err));
     }
@@ -186,6 +271,7 @@ async function start(o) {
         active.delete(id);
 
         if (usesTuner) tuners.release(poolName);
+        else nonTunerCount = Math.max(0, nonTunerCount - 1);
 
         // Deleted mid-record: don't re-add it to the index (or its file is gone).
         if (removed.has(id)) { removed.delete(id); log(`record end "${meta.title}" — deleted`); return; }
@@ -225,6 +311,27 @@ function stop(id) {
     return true;
 }
 
+/**
+ * Busy OTA windows currently recording (for scheduler conflict checks).
+ * @returns {{channelId:string, kind:string, startMs:number, endMs:number}[]}
+ */
+function activeWindows() {
+    const out = [];
+
+    for (const { meta } of active.values()) {
+        if (meta.kind === 'ott') continue;
+
+        out.push({
+            channelId: meta.channelId,
+            kind: meta.kind || 'ota',
+            startMs: meta.startedAt,
+            endMs: meta.startedAt + (meta.plannedSec || 3600) * 1000
+        });
+    }
+
+    return out;
+}
+
 /** @returns {{active:any[], saved:any[], dir:string, tuners:{inUse:number, limit:number}}} */
 function list() {
     const idx = loadIndex();
@@ -237,11 +344,15 @@ function list() {
 
     const saved = [];
 
+    let dirty = false;
+
     for (const r of idx) {
         if (r.status === 'recording' && activeIds.has(r.id)) activeList.push(r);
-        else if (r.status === 'recording') { r.status = 'stopped'; saved.push(r); }
+        else if (r.status === 'recording') { r.status = 'stopped'; dirty = true; saved.push(r); }
         else saved.push(r);
     }
+
+    if (dirty) saveIndex(idx);
 
     return {
         active: activeList,
@@ -264,11 +375,15 @@ function remove(id) {
 
     const rec = arr.find(r => r.id === id);
 
-    if (rec && rec.file) { try { fs.unlinkSync(rec.file); } catch { /* already gone */ } }
+    if (rec) {
+        const file = resolveFile(rec);
+
+        if (file) { try { fs.unlinkSync(file); } catch { /* already gone */ } }
+    }
 
     saveIndex(arr.filter(r => r.id !== id));
 
     return true;
 }
 
-module.exports = { start, stop, list, get, remove, getDir, setDir };
+module.exports = { start, stop, list, get, remove, getDir, setDir, resolveFile, activeWindows, recordingsRoot };
