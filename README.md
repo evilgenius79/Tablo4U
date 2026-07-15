@@ -158,11 +158,14 @@ All endpoints require a session (unless `OPEN=1`):
 | `GET` | `/api/channels` | Native channel lineup (JSON) |
 | `GET` | `/api/guide?date=YYYY-MM-DD` | Native guide airings per channel |
 | `GET` | `/api/stream/:channelId` | Live MPEG-TS stream |
-| `GET` | `/api/recordings` | List active + saved recordings, folder, tuner use |
+| `GET` | `/api/recordings` | List scheduled + active + saved recordings, folder, tuner use |
 | `POST` | `/api/recordings/start` | `{channelId, title, minutes}` → start a recording |
 | `POST` | `/api/recordings/:id/stop` | Stop an in-flight recording |
-| `GET` | `/api/recordings/:id/file` | Play back / download a saved recording |
+| `GET` | `/api/recordings/:id/file` | Play back / download a saved recording (Range-enabled) |
 | `DELETE` | `/api/recordings/:id` | Delete a recording |
+| `POST` | `/api/recordings/schedule` | `{channelId, title, startMs, durationSec}` → schedule a recording |
+| `DELETE` | `/api/recordings/schedule/:id` | Cancel a scheduled recording |
+| `GET` | `/api/hdhr/signal/:channelId` | Live HDHomeRun signal for a channel *(if configured)* |
 | `GET` | `/api/profile` | Current user's favorites + recently watched |
 | `PUT`/`DELETE` | `/api/favorites/:channelId` | Add/remove a favorite |
 | `GET` | `/api/users` | List users *(admin)* |

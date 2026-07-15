@@ -36,20 +36,28 @@ function save(list) {
     fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
 }
 
+/** Which tuner pool a schedule draws from — HDHR and Tablo are separate. */
+function poolOf(entry) {
+    return String(entry.channelId || '').startsWith('hdhr:') ? 'hdhr' : 'tablo';
+}
+
 /**
- * Max number of OTA schedules that overlap at any instant within [start,end),
- * counting the ones already scheduled plus (optionally) a candidate window.
- * OTT schedules use no tuner and are ignored.
+ * Max number of OTA schedules in one tuner pool that overlap at any instant
+ * within [start,end). OTT schedules use no tuner and are ignored, and only
+ * schedules in the same pool count against each other.
  * @param {number} start
  * @param {number} end
  * @param {any[]} list
+ * @param {string} poolName
  * @returns {number}
  */
-function maxOverlap(start, end, list) {
+function maxOverlap(start, end, list, poolName) {
     const events = [];
 
     for (const e of list) {
         if (e.kind === 'ott' || e.status !== 'scheduled') continue;
+
+        if (poolOf(e) !== poolName) continue;
 
         if (e.endMs <= start || e.startMs >= end) continue; // no overlap with window
 
@@ -98,12 +106,16 @@ const Scheduler = {
 
         const list = load();
 
-        // Upfront OTA tuner-conflict check.
+        // Upfront OTA tuner-conflict check, per pool (HDHR vs Tablo).
         if (o.kind !== 'ott') {
-            const concurrent = maxOverlap(startMs, endMs, list) + 1; // +1 for this one
+            const poolName = poolOf(o);
 
-            if (concurrent > tuners.getLimit()) {
-                throw new Error(`tuner conflict — ${concurrent} OTA recordings would overlap but only ${tuners.getLimit()} tuners exist`);
+            const concurrent = maxOverlap(startMs, endMs, list, poolName) + 1; // +1 for this one
+
+            if (concurrent > tuners.getLimit(poolName)) {
+                const label = poolName === 'hdhr' ? 'HDHomeRun' : 'Tablo';
+
+                throw new Error(`tuner conflict — ${concurrent} ${label} recordings would overlap but only ${tuners.getLimit(poolName)} tuners exist`);
             }
         }
 

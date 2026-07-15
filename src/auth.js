@@ -145,6 +145,10 @@ const Auth = {
      * @returns {User|null}
      */
     verify(username, password) {
+        // A missing/non-string password must fail as "invalid", not throw (scrypt
+        // throws on a non-string, which would surface as a 500 on /api/login).
+        if (typeof password !== 'string' || !password) return null;
+
         username = String(username || '').trim().toLowerCase();
 
         const user = load().find(u => u.username === username);

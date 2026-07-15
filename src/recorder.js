@@ -24,6 +24,9 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 /** id -> { proc, meta } for in-flight recordings. */
 const active = new Map();
 
+/** ids deleted while still recording — so finish() doesn't resurrect them. */
+const removed = new Set();
+
 function ensureDir(dir) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -184,6 +187,9 @@ async function start(o) {
 
         if (usesTuner) tuners.release(poolName);
 
+        // Deleted mid-record: don't re-add it to the index (or its file is gone).
+        if (removed.has(id)) { removed.delete(id); log(`record end "${meta.title}" — deleted`); return; }
+
         meta.endedAt = Date.now();
 
         try { meta.bytes = fs.statSync(file).size; } catch { /* file may not exist on failure */ }
@@ -252,7 +258,7 @@ function get(id) {
 
 /** Deletes a recording (file + index entry). Stops it first if in-flight. */
 function remove(id) {
-    if (active.has(id)) stop(id);
+    if (active.has(id)) { removed.add(id); stop(id); } // don't let finish() resurrect it
 
     const arr = loadIndex();
 

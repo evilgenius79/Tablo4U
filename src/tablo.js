@@ -94,7 +94,7 @@ class TabloClient {
      * @param {Record<string,string>} [extraHeaders]
      * @returns {Promise<any>}
      */
-    async cloud(method, path, body = undefined, extraHeaders = {}) {
+    async cloud(method, path, body = undefined, extraHeaders = {}, _retried = false) {
         const headers = {
             'User-Agent': UA,
             'Accept': '*/*',
@@ -110,11 +110,38 @@ class TabloClient {
 
         const text = await res.text();
 
+        // The cloud token expires after a while; on a 401, re-login once and
+        // retry with refreshed tokens so long-running instances don't wedge.
+        if (res.status === 401 && !_retried && !this._relogin && !path.includes('/login/') && this.config.email) {
+            if (await this.relogin()) {
+                const refreshed = { ...extraHeaders };
+
+                if (refreshed.Authorization) refreshed.Authorization = this.authorization;
+
+                if (refreshed.Lighthouse) refreshed.Lighthouse = this.lighthouse;
+
+                return this.cloud(method, path, body, refreshed, true);
+            }
+        }
+
         if (!res.ok) {
             throw new Error(`cloud ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
         }
 
         return text ? JSON.parse(text) : {};
+    }
+
+    /**
+     * Re-runs the login flow to refresh expired tokens. Concurrent callers share
+     * one attempt. @returns {Promise<boolean>}
+     */
+    async relogin() {
+        if (!this._relogin) {
+            this._relogin = (async () => { try { await this.login(); return true; } catch { return false; } })()
+                .finally(() => { this._relogin = null; });
+        }
+
+        return this._relogin;
     }
 
     /**

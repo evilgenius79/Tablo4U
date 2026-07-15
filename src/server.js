@@ -71,8 +71,12 @@ function warmResolutions() {
     if (resWarming) return resWarming;
 
     resWarming = tablo.getChannelResolutions()
-        .then((map) => { if (map && Object.keys(map).length) resCache = { at: Date.now(), map }; })
-        .catch(() => {})
+        .then((map) => {
+            // Stamp `at` on every outcome (even empty/failure) so a failed warm
+            // backs off instead of re-hammering the device 177× on each request.
+            resCache = { at: Date.now(), map: (map && Object.keys(map).length) ? map : resCache.map };
+        })
+        .catch(() => { resCache = { at: Date.now(), map: resCache.map }; })
         .finally(() => { resWarming = null; });
 
     return resWarming;
@@ -525,18 +529,29 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
 
     res.setHeader('Content-Type', 'video/mp2t');
 
+    res.setHeader('Accept-Ranges', 'bytes');
+
     const range = req.headers.range;
 
-    if (range) {
-        const m = /bytes=(\d+)-(\d*)/.exec(range);
+    const m = range && /bytes=(\d*)-(\d*)/.exec(range);
 
-        const startB = m ? parseInt(m[1], 10) : 0;
+    if (m && (m[1] || m[2])) {
+        // Support "start-", "start-end", and suffix "-N" (last N bytes).
+        let startB, endB;
 
-        const endB = m && m[2] ? parseInt(m[2], 10) : size - 1;
+        if (m[1] === '') { startB = Math.max(0, size - parseInt(m[2], 10)); endB = size - 1; }
+        else { startB = parseInt(m[1], 10); endB = m[2] ? parseInt(m[2], 10) : size - 1; }
+
+        endB = Math.min(endB, size - 1);
+
+        // Unsatisfiable (start past EOF or inverted) → 416.
+        if (isNaN(startB) || startB > endB || startB >= size) {
+            res.status(416).setHeader('Content-Range', `bytes */${size}`);
+            return res.end();
+        }
 
         res.status(206);
         res.setHeader('Content-Range', `bytes ${startB}-${endB}/${size}`);
-        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Length', endB - startB + 1);
 
         fs.createReadStream(rec.file, { start: startB, end: endB }).pipe(res);

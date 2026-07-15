@@ -340,7 +340,7 @@ let favOnly = false, query = '';
 const chById = {};
 
 function selectedDateStr() { return $('#date').value; }
-function isToday() { return selectedDateStr() === new Date().toISOString().slice(0, 10); }
+function isToday() { return selectedDateStr() === dstr(new Date()); }   // local date, not UTC
 function filteredChannels() { return channels.filter(channelMatches); }
 
 function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
@@ -950,7 +950,7 @@ $('#today').onclick = () => { setToday(); load(); };
 $('#logout').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 $('#prevPage').onclick = () => shiftWindow(-SHIFT_MIN);
 $('#nextPage').onclick = () => shiftWindow(SHIFT_MIN);
-function setToday() { $('#date').value = new Date().toISOString().slice(0, 10); }
+function setToday() { $('#date').value = dstr(new Date()); }   // local date, not UTC
 // keep the now-line moving as time passes
 setInterval(() => { if (windowStart) updateNowline(); }, 30000);
 
