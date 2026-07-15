@@ -63,12 +63,20 @@ let resCache = { at: 0, map: /** @type {Record<string,string>} */ ({}) };
 
 let resWarming = null;
 
+let resLastAttempt = 0;
+
 const RES_TTL = 6 * 60 * 60 * 1000;
+
+// If a warm fails (device off/unreachable), don't re-walk all the per-channel
+// device requests on every getChannels() call — wait this long between tries.
+const RES_RETRY = 5 * 60 * 1000;
 
 function warmResolutions() {
     if (MOCK || !tablo) return Promise.resolve();
 
     if (resWarming) return resWarming;
+
+    resLastAttempt = Date.now();
 
     resWarming = tablo.getChannelResolutions()
         .then((map) => { if (map && Object.keys(map).length) resCache = { at: Date.now(), map }; })
@@ -108,7 +116,7 @@ async function getChannels() {
     // Merge in HD/SD from the Tablo device (cached). HDHR channels already carry
     // their own resolution from the lineup, so skip those.
     if (!MOCK && tablo) {
-        if (Date.now() - resCache.at > RES_TTL) warmResolutions();
+        if (Date.now() - resCache.at > RES_TTL && Date.now() - resLastAttempt > RES_RETRY) warmResolutions();
 
         for (const ch of channels) {
             if (ch.source === 'hdhr') continue;
@@ -247,11 +255,16 @@ const app = express();
 
 app.use(express.json());
 
+// Trust the first proxy hop (the README's reverse-proxy setup) so
+// secure:'auto' marks the session cookie Secure when serving over HTTPS,
+// while plain-HTTP LAN use keeps working.
+app.set('trust proxy', 1);
+
 app.use(session({
     secret: process.env.SESSION_SECRET || crypto.randomBytes(16).toString('hex'),
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 }
+    cookie: { httpOnly: true, sameSite: 'lax', secure: 'auto', maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
 
 // ---- auth middleware ----
@@ -337,8 +350,21 @@ app.get('/api/channels', requireAuth, async (req, res) => {
     }
 });
 
+/** Local (not UTC) YYYY-MM-DD, matching how the UI builds guide dates. */
+function localDateStr(d = new Date()) {
+    const p = (n) => String(n).padStart(2, '0');
+
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 app.get('/api/guide', requireAuth, async (req, res) => {
-    const date = String(req.query.date || new Date().toISOString().slice(0, 10));
+    const date = String(req.query.date || localDateStr());
+
+    // Reject junk early — otherwise arbitrary strings get sent to the Tablo
+    // cloud API and cached in guideCache forever.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'invalid date (expected YYYY-MM-DD)' });
+    }
 
     try {
         res.json({ date, guide: await getGuideForDate(date) });
@@ -527,12 +553,26 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
 
     const range = req.headers.range;
 
-    if (range) {
-        const m = /bytes=(\d+)-(\d*)/.exec(range);
+    const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
 
-        const startB = m ? parseInt(m[1], 10) : 0;
+    if (m && (m[1] || m[2])) {
+        let startB = m[1] ? parseInt(m[1], 10) : 0;
 
-        const endB = m && m[2] ? parseInt(m[2], 10) : size - 1;
+        let endB = m[2] ? parseInt(m[2], 10) : size - 1;
+
+        // Suffix range (bytes=-N): the last N bytes.
+        if (!m[1]) { startB = Math.max(0, size - endB); endB = size - 1; }
+
+        endB = Math.min(endB, size - 1);
+
+        // Unsatisfiable (start past EOF or inverted) — don't hand
+        // fs.createReadStream an invalid start/end (it throws) or emit a
+        // negative Content-Length.
+        if (startB > endB) {
+            res.status(416).setHeader('Content-Range', `bytes */${size}`);
+
+            return res.end();
+        }
 
         res.status(206);
         res.setHeader('Content-Range', `bytes ${startB}-${endB}/${size}`);
@@ -541,6 +581,7 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
 
         fs.createReadStream(rec.file, { start: startB, end: endB }).pipe(res);
     } else {
+        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Length', size);
 
         fs.createReadStream(rec.file).pipe(res);
