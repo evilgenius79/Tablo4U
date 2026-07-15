@@ -37,19 +37,30 @@ function save(list) {
 }
 
 /**
- * Max number of OTA schedules that overlap at any instant within [start,end),
- * counting the ones already scheduled plus (optionally) a candidate window.
- * OTT schedules use no tuner and are ignored.
+ * Which physical tuner pool a channel draws from — HDHomeRun devices have
+ * their own tuners, separate from the Tablo's (mirrors stream.js/recorder.js).
+ * @param {string} channelId
+ * @returns {string}
+ */
+function poolOf(channelId) {
+    return String(channelId || '').startsWith('hdhr:') ? 'hdhr' : 'tablo';
+}
+
+/**
+ * Max number of OTA schedules in one tuner pool that overlap at any instant
+ * within [start,end). OTT schedules use no tuner and are ignored, as are
+ * schedules on the other pool's device.
  * @param {number} start
  * @param {number} end
  * @param {any[]} list
+ * @param {string} pool
  * @returns {number}
  */
-function maxOverlap(start, end, list) {
+function maxOverlap(start, end, list, pool) {
     const events = [];
 
     for (const e of list) {
-        if (e.kind === 'ott' || e.status !== 'scheduled') continue;
+        if (e.kind === 'ott' || e.status !== 'scheduled' || poolOf(e.channelId) !== pool) continue;
 
         if (e.endMs <= start || e.startMs >= end) continue; // no overlap with window
 
@@ -98,12 +109,14 @@ const Scheduler = {
 
         const list = load();
 
-        // Upfront OTA tuner-conflict check.
+        // Upfront OTA tuner-conflict check, against the right device's tuners.
         if (o.kind !== 'ott') {
-            const concurrent = maxOverlap(startMs, endMs, list) + 1; // +1 for this one
+            const pool = poolOf(o.channelId);
 
-            if (concurrent > tuners.getLimit()) {
-                throw new Error(`tuner conflict — ${concurrent} OTA recordings would overlap but only ${tuners.getLimit()} tuners exist`);
+            const concurrent = maxOverlap(startMs, endMs, list, pool) + 1; // +1 for this one
+
+            if (concurrent > tuners.getLimit(pool)) {
+                throw new Error(`tuner conflict — ${concurrent} OTA recordings would overlap but only ${tuners.getLimit(pool)} tuners exist`);
             }
         }
 

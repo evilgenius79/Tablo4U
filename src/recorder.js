@@ -21,7 +21,7 @@ const DATA_DIR = path.join(baseDir(), 'data');
 const INDEX_FILE = path.join(DATA_DIR, 'recordings.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
-/** id -> { proc, meta } for in-flight recordings. */
+/** id -> { proc, meta, deleted? } for in-flight recordings. */
 const active = new Map();
 
 function ensureDir(dir) {
@@ -178,11 +178,25 @@ async function start(o) {
     }
 
     const finish = (status) => {
-        if (!active.has(id)) return;
+        const entry = active.get(id);
+
+        if (!entry) return;
 
         active.delete(id);
 
         if (usesTuner) tuners.release(poolName);
+
+        // Deleted while still recording: don't upsert the metadata back into
+        // the index (that would resurrect the deleted entry), and remove the
+        // file now that ffmpeg has released it (Windows can't unlink a file
+        // another process still has open).
+        if (entry.deleted) {
+            try { fs.unlinkSync(file); } catch { /* already gone */ }
+
+            log(`record deleted "${meta.title}" (was still recording)`);
+
+            return;
+        }
 
         meta.endedAt = Date.now();
 
@@ -252,13 +266,21 @@ function get(id) {
 
 /** Deletes a recording (file + index entry). Stops it first if in-flight. */
 function remove(id) {
-    if (active.has(id)) stop(id);
+    const inflight = active.get(id);
+
+    if (inflight) {
+        // Flag it so finish() skips the re-upsert and deletes the file once
+        // ffmpeg has actually exited (and released its handle on Windows).
+        inflight.deleted = true;
+
+        stop(id);
+    }
 
     const arr = loadIndex();
 
     const rec = arr.find(r => r.id === id);
 
-    if (rec && rec.file) { try { fs.unlinkSync(rec.file); } catch { /* already gone */ } }
+    if (!inflight && rec && rec.file) { try { fs.unlinkSync(rec.file); } catch { /* already gone */ } }
 
     saveIndex(arr.filter(r => r.id !== id));
 

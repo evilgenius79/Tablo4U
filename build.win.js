@@ -1,6 +1,7 @@
 /**
  * @file Builds a standalone Windows .exe of Tablo4U.
- * Web assets (public/) are embedded via the "pkg".assets config in package.json.
+ * Web assets (public/) are embedded by scripts/bundle-assets.js, which emits
+ * src/assets.generated.js so pkg picks them up as a plain require()'d module.
  */
 
 const exe = require('@hearhellacopters/exe');

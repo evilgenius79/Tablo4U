@@ -94,7 +94,7 @@ const Auth = {
     addUser(username, password, role = 'user') {
         username = String(username || '').trim().toLowerCase();
 
-        if (!username || !password) {
+        if (!username || !password || typeof password !== 'string') {
             throw new Error('username and password required');
         }
 
@@ -146,6 +146,12 @@ const Auth = {
      */
     verify(username, password) {
         username = String(username || '').trim().toLowerCase();
+
+        // Non-string/missing passwords would make scryptSync throw (a 500 on
+        // /api/login) — treat them as plain bad credentials instead.
+        if (typeof password !== 'string' || !password) {
+            return null;
+        }
 
         const user = load().find(u => u.username === username);
 

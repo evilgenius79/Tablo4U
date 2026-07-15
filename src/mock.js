@@ -9,7 +9,6 @@ const now = Date.now();
 /**
  * Tiny inline SVG "logo" so the UI can show channel logos in mock mode.
  * @param {string} text
- * @param {string} color
  * @returns {string} data URI
  */
 function logo(text) {
@@ -55,12 +54,12 @@ function airing(startOffsetMin, durationMin, title, desc, extra = {}) {
 }
 
 const channels = [
-    { identifier: 'S1_004_01', name: 'KOMO', kind: 'ota', resolution: 'hd_1080', logos: [{ kind: 'lightLarge', url: logo('ABC', '#0a5cad') }], ota: { major: 4, minor: 1, network: 'ABC', callSign: 'KOMO' } },
-    { identifier: 'S1_005_01', name: 'KING', kind: 'ota', resolution: 'hd_1080', logos: [{ kind: 'lightLarge', url: logo('NBC', '#6b4fbb') }], ota: { major: 5, minor: 1, network: 'NBC', callSign: 'KING' } },
-    { identifier: 'S1_007_01', name: 'KIRO', kind: 'ota', resolution: 'hd_720', logos: [{ kind: 'lightLarge', url: logo('CBS', '#0b6cc4') }], ota: { major: 7, minor: 1, network: 'CBS', callSign: 'KIRO' } },
-    { identifier: 'S1_013_01', name: 'KCTS', kind: 'ota', resolution: 'sd', logos: [{ kind: 'lightLarge', url: logo('PBS', '#2b3a67') }], ota: { major: 13, minor: 1, network: 'PBS', callSign: 'KCTS' } },
+    { identifier: 'S1_004_01', name: 'KOMO', kind: 'ota', resolution: 'hd_1080', logos: [{ kind: 'lightLarge', url: logo('ABC') }], ota: { major: 4, minor: 1, network: 'ABC', callSign: 'KOMO' } },
+    { identifier: 'S1_005_01', name: 'KING', kind: 'ota', resolution: 'hd_1080', logos: [{ kind: 'lightLarge', url: logo('NBC') }], ota: { major: 5, minor: 1, network: 'NBC', callSign: 'KING' } },
+    { identifier: 'S1_007_01', name: 'KIRO', kind: 'ota', resolution: 'hd_720', logos: [{ kind: 'lightLarge', url: logo('CBS') }], ota: { major: 7, minor: 1, network: 'CBS', callSign: 'KIRO' } },
+    { identifier: 'S1_013_01', name: 'KCTS', kind: 'ota', resolution: 'sd', logos: [{ kind: 'lightLarge', url: logo('PBS') }], ota: { major: 13, minor: 1, network: 'PBS', callSign: 'KCTS' } },
     { identifier: 'S1_011_01', name: 'KSTW', kind: 'ota', resolution: 'sd', logos: [], ota: { major: 11, minor: 1, network: 'CW', callSign: 'KSTW' } },
-    { identifier: 'O1_206_00', name: 'Pluto Movies', kind: 'ott', logos: [{ kind: 'lightLarge', url: logo('PLUTO', '#c2410c') }], ott: { major: 206, minor: 0, network: 'Pluto Movies', callSign: 'PLUTO', streamUrl: '' } }
+    { identifier: 'O1_206_00', name: 'Pluto Movies', kind: 'ott', logos: [{ kind: 'lightLarge', url: logo('PLUTO') }], ott: { major: 206, minor: 0, network: 'Pluto Movies', callSign: 'PLUTO', streamUrl: '' } }
 ];
 
 /** @type {Record<string, any[]>} */
