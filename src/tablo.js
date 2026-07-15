@@ -105,7 +105,8 @@ class TabloClient {
         const res = await fetch(`https://${CLOUD_HOST}${path}`, {
             method,
             headers,
-            body: body != undefined ? JSON.stringify(body) : undefined
+            body: body != undefined ? JSON.stringify(body) : undefined,
+            signal: AbortSignal.timeout(15000)
         });
 
         const text = await res.text();
@@ -179,10 +180,17 @@ class TabloClient {
 
         url.search = 'lh';
 
+        // SSRF guard: a path like "http://evil/" or "//evil/" resolves to a
+        // different origin — never send a signed request off the device.
+        if (url.origin !== new URL(this.device.url).origin) {
+            throw new Error('blocked cross-origin device request');
+        }
+
         const res = await fetch(url.toString(), {
             method,
             headers,
-            body: method == 'POST' ? msg : undefined
+            body: method == 'POST' ? msg : undefined,
+            signal: AbortSignal.timeout(8000)
         });
 
         const text = await res.text();

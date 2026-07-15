@@ -14,6 +14,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { pipeline } = require('stream');
 
 const { baseDir } = require('./paths');
 
@@ -22,7 +23,29 @@ require('dotenv').config({ path: path.join(baseDir(), '.env') });
 
 const express = require('express');
 const session = require('express-session');
+const compression = require('compression');
 const crypto = require('crypto');
+
+const { validChannelId, validDate } = require('./validate');
+const { atomicWrite } = require('./fsatomic');
+
+/** Persist the auto-generated session secret so logins survive restarts. */
+function sessionSecret() {
+    if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+
+    const dir = path.join(baseDir(), 'data');
+    const file = path.join(dir, 'session-secret');
+
+    try { return fs.readFileSync(file, 'utf8'); }
+    catch { /* generate below */ }
+
+    const secret = crypto.randomBytes(32).toString('hex');
+
+    try { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); atomicWrite(file, secret, 0o600); }
+    catch { /* fall back to in-memory (won't persist) */ }
+
+    return secret;
+}
 
 const { TabloClient } = require('./tablo');
 const { HdhrClient } = require('./hdhr');
@@ -97,8 +120,13 @@ function indexKinds(channels) {
     }
 }
 
-/** @returns {Promise<any[]>} */
-async function getChannels() {
+// Channel lineup is cached (Tablo cloud round-trip is slow) and concurrent
+// misses share one in-flight fetch.
+let chanCache = { at: 0, data: /** @type {any[]|null} */ (null) };
+let chanInflight = /** @type {Promise<any[]>|null} */ (null);
+const CHAN_TTL = 5 * 60 * 1000;
+
+async function fetchChannels() {
     let channels = MOCK ? mock.channels : (tablo ? await tablo.getChannels() : []);
 
     // Merge in HDHomeRun channels (tagged source:'hdhr'), if configured.
@@ -126,6 +154,19 @@ async function getChannels() {
     return channels;
 }
 
+/** @returns {Promise<any[]>} */
+async function getChannels() {
+    if (chanCache.data && Date.now() - chanCache.at < CHAN_TTL) return chanCache.data;
+
+    if (chanInflight) return chanInflight;
+
+    chanInflight = fetchChannels()
+        .then((channels) => { chanCache = { at: Date.now(), data: channels }; return channels; })
+        .finally(() => { chanInflight = null; });
+
+    return chanInflight;
+}
+
 /**
  * @param {string} date
  * @returns {Promise<Record<string, any[]>>}
@@ -137,6 +178,23 @@ async function getGuideForDate(date) {
 
     if (cached && Date.now() - cached.at < GUIDE_TTL) return cached.data;
 
+    // Coalesce concurrent misses for the same date (the UI fetches two dates when
+    // the window straddles midnight) onto one in-flight crawl.
+    if (guideInflight.has(date)) return guideInflight.get(date);
+
+    const p = crawlGuide(date).finally(() => guideInflight.delete(date));
+
+    guideInflight.set(date, p);
+
+    return p;
+}
+
+const guideInflight = new Map();
+
+const GUIDE_CACHE_MAX = 8;
+
+/** @param {string} date */
+async function crawlGuide(date) {
     const channels = await getChannels();
 
     /** @type {Record<string, any[]>} */
@@ -181,6 +239,11 @@ async function getGuideForDate(date) {
     }
 
     guideCache.set(date, { at: Date.now(), data: out });
+
+    // Bound the cache: drop expired entries, then evict oldest beyond the cap.
+    for (const [d, v] of guideCache) if (Date.now() - v.at > GUIDE_TTL) guideCache.delete(d);
+
+    while (guideCache.size > GUIDE_CACHE_MAX) guideCache.delete(guideCache.keys().next().value);
 
     return out;
 }
@@ -249,14 +312,53 @@ loadStatic();
 
 const app = express();
 
-app.use(express.json());
+app.disable('x-powered-by');
+
+// gzip responses (the guide JSON for 100+ channels is large, especially remote).
+// Never compress the live MPEG-TS stream or recording playback — buffering there
+// would add latency / break streaming.
+app.use(compression({
+    filter: (req, res) => {
+        if (req.path.startsWith('/api/stream/')) return false;
+        if (/^\/api\/recordings\/[^/]+\/file$/.test(req.path)) return false;
+        return compression.filter(req, res);
+    }
+}));
+
+// Behind a reverse proxy (HTTPS), trust it so secure cookies + the real client
+// IP work. Set TRUST_PROXY=1 when running behind Caddy/nginx/etc.
+if (process.env.TRUST_PROXY == '1') app.set('trust proxy', 1);
+
+// Baseline security headers.
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+});
+
+app.use(express.json({ limit: '256kb' }));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || crypto.randomBytes(16).toString('hex'),
+    secret: sessionSecret(),
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 }
+    cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        // Set SECURE_COOKIES=1 when served over HTTPS (needs TRUST_PROXY behind a proxy).
+        secure: process.env.SECURE_COOKIES == '1',
+        maxAge: 7 * 24 * 60 * 60 * 1000
+    }
 }));
+
+// Validate any :channelId route param (stream, signal, favorites) so channel
+// ids can't carry path-traversal into signed device requests.
+app.param('channelId', (req, res, next, id) => {
+    if (!validChannelId(id)) return res.status(400).json({ error: 'invalid channel id' });
+
+    next();
+});
 
 // ---- auth middleware ----
 
@@ -270,25 +372,71 @@ function requireAuth(req, res, next) {
     return res.redirect('/login');
 }
 
-/** @type {express.RequestHandler} */
+/**
+ * Admin gate. Unlike requireAuth, OPEN=1 does NOT grant admin — sensitive
+ * actions (user management, device probe, changing the recordings folder)
+ * require a real signed-in admin even on a LAN-open instance.
+ * @type {express.RequestHandler}
+ */
 function requireAdmin(req, res, next) {
     // @ts-ignore
-    if (OPEN || (req.session && req.session.user && req.session.user.role === 'admin')) return next();
+    if (req.session && req.session.user && req.session.user.role === 'admin') return next();
 
     return res.status(403).json({ error: 'admin only' });
+}
+
+// ---- login rate limiting (in-memory) ----
+// 10 failures per 15 min, keyed by client IP + username, so one attacker can't
+// brute-force and can't lock everyone else out.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 10;
+/** @type {Map<string, {count:number, first:number}>} */
+const loginFails = new Map();
+
+function loginKey(req, username) {
+    return (req.ip || req.socket.remoteAddress || '?') + '|' + String(username || '').toLowerCase();
+}
+function loginBlocked(key) {
+    const e = loginFails.get(key);
+    if (!e) return false;
+    if (Date.now() - e.first > LOGIN_WINDOW_MS) { loginFails.delete(key); return false; }
+    return e.count >= LOGIN_MAX_FAILS;
+}
+function loginFailed(key) {
+    const e = loginFails.get(key);
+    if (!e || Date.now() - e.first > LOGIN_WINDOW_MS) loginFails.set(key, { count: 1, first: Date.now() });
+    else e.count += 1;
 }
 
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body || {};
 
+    const key = loginKey(req, username);
+
+    if (loginBlocked(key)) {
+        return res.status(429).json({ error: 'too many attempts — try again later' });
+    }
+
     const user = Auth.verify(username, password);
 
-    if (!user) return res.status(401).json({ error: 'invalid credentials' });
+    if (!user) {
+        loginFailed(key);
 
+        return res.status(401).json({ error: 'invalid credentials' });
+    }
+
+    loginFails.delete(key);
+
+    // Regenerate the session id on login to prevent session fixation.
     // @ts-ignore
-    req.session.user = { username: user.username, role: user.role };
+    req.session.regenerate((err) => {
+        if (err) return res.status(500).json({ error: 'session error' });
 
-    res.json({ ok: true, user: { username: user.username, role: user.role } });
+        // @ts-ignore
+        req.session.user = { username: user.username, role: user.role };
+
+        res.json({ ok: true, user: { username: user.username, role: user.role } });
+    });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -344,6 +492,10 @@ app.get('/api/channels', requireAuth, async (req, res) => {
 app.get('/api/guide', requireAuth, async (req, res) => {
     const date = String(req.query.date || new Date().toISOString().slice(0, 10));
 
+    // Validate to a real YYYY-MM-DD so it can't become an arbitrary URL segment
+    // or an unbounded cache key.
+    if (!validDate(date)) return res.status(400).json({ error: 'invalid date (YYYY-MM-DD)' });
+
     try {
         res.json({ date, guide: await getGuideForDate(date) });
     } catch (err) {
@@ -359,9 +511,14 @@ app.get('/api/device/probe', requireAuth, requireAdmin, async (req, res) => {
     if (!tablo) return res.status(502).json({ error: 'Tablo not connected' });
 
     // ?path=/guide/channels/180 — fetch any single device path raw, so we can
-    // keep digging without rebuilding the exe.
+    // keep digging without rebuilding the exe. Must be a safe relative path
+    // (deviceReq also enforces same-origin) so it can't be abused for SSRF.
     if (req.query.path) {
         const p = String(req.query.path);
+
+        if (!p.startsWith('/') || p.startsWith('//') || p.includes('://') || p.includes('..')) {
+            return res.status(400).json({ error: 'path must be a relative device path like /server/info' });
+        }
 
         try {
             return res.json({ path: p, result: await tablo.deviceReq('GET', p) });
@@ -466,7 +623,7 @@ app.post('/api/recordings/schedule', requireAuth, (req, res) => {
     try {
         const { channelId, title, startMs, durationSec } = req.body || {};
 
-        if (!channelId || !startMs) return res.status(400).json({ error: 'channelId and startMs required' });
+        if (!validChannelId(channelId) || !startMs) return res.status(400).json({ error: 'valid channelId and startMs required' });
 
         const entry = scheduler.add({
             channelId,
@@ -491,7 +648,7 @@ app.post('/api/recordings/start', requireAuth, async (req, res) => {
     try {
         const { channelId, title, minutes } = req.body || {};
 
-        if (!channelId) return res.status(400).json({ error: 'channelId required' });
+        if (!validChannelId(channelId)) return res.status(400).json({ error: 'valid channelId required' });
 
         const meta = await recorder.start({
             mock: MOCK,
@@ -523,9 +680,19 @@ app.delete('/api/recordings/:id', requireAuth, (req, res) => {
 app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
     const rec = recorder.get(req.params.id);
 
-    if (!rec || !rec.file || !fs.existsSync(rec.file)) return res.status(404).send('not found');
+    if (!rec || !rec.file) return res.status(404).send('not found');
 
-    const size = fs.statSync(rec.file).size;
+    // Confine playback to the recordings folder — never serve an arbitrary path
+    // out of the index (defense against a tampered/legacy entry → LFI).
+    const dir = path.resolve(recorder.getDir());
+
+    const file = path.resolve(rec.file);
+
+    if (file !== dir && !file.startsWith(dir + path.sep)) return res.status(403).send('forbidden');
+
+    if (!fs.existsSync(file)) return res.status(404).send('not found');
+
+    const size = fs.statSync(file).size;
 
     res.setHeader('Content-Type', 'video/mp2t');
 
@@ -534,6 +701,9 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
     const range = req.headers.range;
 
     const m = range && /bytes=(\d*)-(\d*)/.exec(range);
+
+    /** @type {import('fs').ReadStream} */
+    let stream;
 
     if (m && (m[1] || m[2])) {
         // Support "start-", "start-end", and suffix "-N" (last N bytes).
@@ -554,12 +724,16 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
         res.setHeader('Content-Range', `bytes ${startB}-${endB}/${size}`);
         res.setHeader('Content-Length', endB - startB + 1);
 
-        fs.createReadStream(rec.file, { start: startB, end: endB }).pipe(res);
+        stream = fs.createReadStream(file, { start: startB, end: endB });
     } else {
         res.setHeader('Content-Length', size);
 
-        fs.createReadStream(rec.file).pipe(res);
+        stream = fs.createReadStream(file);
     }
+
+    // pipeline() destroys the read stream on client abort/error (a plain .pipe()
+    // leaks the file descriptor — and seeking fires many aborted range requests).
+    pipeline(stream, res, () => { /* client aborted or done; nothing to do */ });
 });
 
 // Recordings folder (admin): view / change the save location.
@@ -616,7 +790,11 @@ function sendStatic(res, url) {
 
     res.set('Content-Type', asset.type);
 
-    res.send(asset.body);
+    // Vendor libraries (mpegts.js / hls.js, ~630 KB) are effectively immutable —
+    // cache them hard; everything else revalidates via Express's ETag (304).
+    res.set('Cache-Control', url.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-cache');
+
+    res.send(asset.body); // Express adds an ETag and answers If-None-Match with 304
 
     return true;
 }
@@ -638,6 +816,10 @@ app.use(requireAuth, (req, res, next) => {
 // ---- boot ----
 
 (async function start() {
+    // Cap concurrent non-tuner (OTT) ffmpeg processes so they can't be spawned
+    // without bound. Override with MAX_NON_TUNER_FFMPEG.
+    tuners.setLimit(Math.max(1, parseInt(process.env.MAX_NON_TUNER_FFMPEG, 10) || 8), 'ott');
+
     if (!OPEN) {
         if (process.env.ADMIN_PASSWORD) {
             // ADMIN_PASSWORD always wins: create the admin with it, or reset the

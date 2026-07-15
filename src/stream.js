@@ -143,6 +143,10 @@ async function buildArgs(o) {
     // MPEG-2, ATSC 3.0 is HEVC — libx264 handles both inputs).
     if (o.hdhrUrl) return otaArgs(o.hdhrUrl, o.out, o.durationSec);
 
+    // An HDHR channel with no resolved URL must error here, not fall through to a
+    // Tablo watch request with an "hdhr:" id.
+    if (String(o.channelId || '').startsWith('hdhr:')) throw new Error('HDHomeRun channel URL unavailable');
+
     if (!o.tablo) throw new Error('Tablo not connected');
 
     const url = await getPlaylistUrl(o.tablo, o.channelId);
@@ -173,14 +177,15 @@ async function handleStream(req, res, opts) {
 
     const isOtt = !isHdhr && opts.kindOf(channelId) === 'ott';
 
-    // HDHR and Tablo have separate physical tuners → separate pools. OTT uses none.
-    const poolName = isHdhr ? 'hdhr' : 'tablo';
+    // Tablo OTA and HDHR each draw from their own physical-tuner pool; OTT (no
+    // tuner) draws from a soft 'ott' pool so it can't spawn unlimited ffmpeg.
+    const poolName = isHdhr ? 'hdhr' : isOtt ? 'ott' : 'tablo';
 
-    const usesTuner = !isOtt && !opts.mock;
+    const usesSlot = !opts.mock;
 
     // Reserve before the async watch so concurrent requests can't oversubscribe.
-    if (usesTuner && !tuners.tryReserve(poolName)) {
-        res.status(503).send('All tuners are in use.');
+    if (usesSlot && !tuners.tryReserve(poolName)) {
+        res.status(503).send(poolName === 'ott' ? 'Too many OTT streams active.' : 'All tuners are in use.');
 
         return;
     }
@@ -191,14 +196,14 @@ async function handleStream(req, res, opts) {
     try {
         args = await buildArgs({ mock: opts.mock, tablo: opts.tablo, channelId, isOtt, hdhrUrl });
     } catch (err) {
-        if (usesTuner) tuners.release(poolName);
+        if (usesSlot) tuners.release(poolName);
 
         res.status(502).send('stream failed: ' + (err && err.message || err));
 
         return;
     }
 
-    log(`stream start ${channelId}${opts.mock ? ' (mock)' : isOtt ? ' (ott, no tuner)' : ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]`}`);
+    log(`stream start ${channelId}${opts.mock ? ' (mock)' : ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]`}`);
 
     const ffmpeg = spawn('ffmpeg', args);
 
@@ -209,11 +214,11 @@ async function handleStream(req, res, opts) {
 
         done = true;
 
-        if (usesTuner) tuners.release(poolName);
+        if (usesSlot) tuners.release(poolName);
 
         ffmpeg.kill('SIGKILL');
 
-        log(`stream end ${channelId}${usesTuner ? ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]` : ''}`);
+        log(`stream end ${channelId}${usesSlot ? ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]` : ''}`);
     };
 
     res.setHeader('Content-Type', 'video/mp2t');
@@ -240,6 +245,11 @@ async function handleStream(req, res, opts) {
     req.on('close', cleanup);
 
     res.on('close', cleanup);
+
+    // If the client disconnected during the async setup above (watch/buildArgs),
+    // the 'close' events already fired before these listeners were attached —
+    // catch that here so the tuner + ffmpeg don't leak.
+    if (req.destroyed || res.destroyed) cleanup();
 }
 
 module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl };

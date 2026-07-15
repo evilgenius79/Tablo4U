@@ -14,6 +14,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const { baseDir } = require('./paths');
+const { atomicWrite } = require('./fsatomic');
 const tuners = require('./tuners');
 const { buildArgs } = require('./stream');
 
@@ -37,7 +38,7 @@ function readJson(file, fallback) {
 
 function writeJson(file, data) {
     ensureDir(path.dirname(file));
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    atomicWrite(file, JSON.stringify(data, null, 2));
 }
 
 /** @returns {string} the configured recordings directory. */
@@ -118,12 +119,12 @@ async function start(o) {
 
     const isHdhr = String(o.channelId || '').startsWith('hdhr:');
 
-    const poolName = isHdhr ? 'hdhr' : 'tablo';
+    const poolName = isHdhr ? 'hdhr' : isOtt ? 'ott' : 'tablo';
 
-    const usesTuner = !isOtt && !o.mock;
+    const usesSlot = !o.mock;
 
-    if (usesTuner && !tuners.tryReserve(poolName)) {
-        throw new Error('All tuners are in use — cannot start recording.');
+    if (usesSlot && !tuners.tryReserve(poolName)) {
+        throw new Error(poolName === 'ott' ? 'Too many OTT streams active — cannot record.' : 'All tuners are in use — cannot start recording.');
     }
 
     const durationSec = Math.max(1, Math.round((o.minutes || 60) * 60));
@@ -144,7 +145,7 @@ async function start(o) {
     try {
         args = await buildArgs({ mock: o.mock, tablo: o.tablo, channelId: o.channelId, isOtt, hdhrUrl: o.hdhrUrl, out: file, durationSec });
     } catch (err) {
-        if (usesTuner) tuners.release(poolName);
+        if (usesSlot) tuners.release(poolName);
 
         throw new Error('stream failed: ' + (err && err.message || err));
     }
@@ -172,7 +173,7 @@ async function start(o) {
 
     active.set(id, { proc: ffmpeg, meta });
 
-    log(`record start "${meta.title}" (${o.channelName}) → ${base}${usesTuner ? ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]` : ' (ott, no tuner)'}`);
+    log(`record start "${meta.title}" (${o.channelName}) → ${base}${usesSlot ? ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]` : ' (mock)'}`);
 
     if (process.env.STREAM_DEBUG == '1') {
         ffmpeg.stderr.on('data', (d) => process.stderr.write('[rec] ' + d));
@@ -185,10 +186,17 @@ async function start(o) {
 
         active.delete(id);
 
-        if (usesTuner) tuners.release(poolName);
+        if (usesSlot) tuners.release(poolName);
 
-        // Deleted mid-record: don't re-add it to the index (or its file is gone).
-        if (removed.has(id)) { removed.delete(id); log(`record end "${meta.title}" — deleted`); return; }
+        // Deleted mid-record: don't re-add it to the index, and now that ffmpeg
+        // has exited the file handle is closed — safe to unlink (matters on
+        // Windows, where an open file can't be deleted).
+        if (removed.has(id)) {
+            removed.delete(id);
+            try { fs.unlinkSync(file); } catch { /* already gone */ }
+            log(`record end "${meta.title}" — deleted`);
+            return;
+        }
 
         meta.endedAt = Date.now();
 
@@ -237,11 +245,16 @@ function list() {
 
     const saved = [];
 
+    let dirty = false;
+
     for (const r of idx) {
         if (r.status === 'recording' && activeIds.has(r.id)) activeList.push(r);
-        else if (r.status === 'recording') { r.status = 'stopped'; saved.push(r); }
+        else if (r.status === 'recording') { r.status = 'stopped'; dirty = true; saved.push(r); }
         else saved.push(r);
     }
+
+    // Persist the reconciled statuses so they don't stay inconsistent forever.
+    if (dirty) saveIndex(idx);
 
     return {
         active: activeList,
@@ -258,13 +271,17 @@ function get(id) {
 
 /** Deletes a recording (file + index entry). Stops it first if in-flight. */
 function remove(id) {
-    if (active.has(id)) { removed.add(id); stop(id); } // don't let finish() resurrect it
+    const wasActive = active.has(id);
+
+    if (wasActive) { removed.add(id); stop(id); } // finish() unlinks after ffmpeg exits
 
     const arr = loadIndex();
 
     const rec = arr.find(r => r.id === id);
 
-    if (rec && rec.file) { try { fs.unlinkSync(rec.file); } catch { /* already gone */ } }
+    // For a finished recording, unlink now. For an in-flight one, leave the file
+    // to finish() (unlinking an open file fails on Windows).
+    if (!wasActive && rec && rec.file) { try { fs.unlinkSync(rec.file); } catch { /* already gone */ } }
 
     saveIndex(arr.filter(r => r.id !== id));
 

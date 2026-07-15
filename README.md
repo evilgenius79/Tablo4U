@@ -175,10 +175,20 @@ All endpoints require a session (unless `OPEN=1`):
 ## Security
 
 - This server fronts your Tablo, so treat access to it like access to your
-  device. On a trusted LAN you can even run it open (`OPEN=1`); anywhere else,
-  keep sign-in **on**.
-- Passwords are scrypt-hashed; `data/users.json` is written owner-only.
-- Set `SESSION_SECRET` in production so sessions persist and aren't guessable.
+  device. On a trusted LAN you can run it open (`OPEN=1`); anywhere else, keep
+  sign-in **on**. `OPEN=1` never grants **admin** — user management, the device
+  probe, and changing the recordings folder always require a real admin login.
+- Passwords are scrypt-hashed (constant-time compare, dummy-hash for unknown
+  usernames so timing doesn't leak them); `data/users.json` is written
+  owner-only and persisted atomically.
+- Login is **rate-limited** (10 failures / 15 min per IP+username) and the
+  session id is regenerated on login.
+- The session secret is auto-persisted (`data/session-secret`) so logins survive
+  restarts; `SESSION_SECRET` overrides it.
+- Channel IDs and dates are validated at every API boundary; device requests are
+  pinned to the device's own origin (no SSRF); baseline security headers
+  (`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`) are set.
+- Behind HTTPS, set `TRUST_PROXY=1` and `SECURE_COOKIES=1`.
 - Never expose it to the internet with `OPEN=1` — that would let anyone who
   finds the URL stream your tuners.
 

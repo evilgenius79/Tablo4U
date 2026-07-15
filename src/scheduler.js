@@ -13,6 +13,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const { baseDir } = require('./paths');
+const { atomicWrite } = require('./fsatomic');
 const tuners = require('./tuners');
 
 const DATA_DIR = path.join(baseDir(), 'data');
@@ -21,10 +22,16 @@ const FILE = path.join(DATA_DIR, 'schedule.json');
 // Record a bit past the listed end so overruns (sports, live TV) aren't cut off.
 const POST_PAD_SEC = 120;
 
+// Cap a single scheduled recording (same 6h ceiling as manual ones) so a bogus
+// duration can't fill the disk.
+const MAX_DURATION_SEC = 6 * 3600;
+
 /** @type {(entry:any)=>Promise<any>} */
 let fireFn = null;
 
 let sweepTimer = null;
+
+let sweeping = false;
 
 function load() {
     try { const a = JSON.parse(fs.readFileSync(FILE, 'utf8')); return Array.isArray(a) ? a : []; }
@@ -33,7 +40,7 @@ function load() {
 
 function save(list) {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
+    atomicWrite(FILE, JSON.stringify(list, null, 2));
 }
 
 /** Which tuner pool a schedule draws from — HDHR and Tablo are separate. */
@@ -98,7 +105,7 @@ const Scheduler = {
     add(o) {
         const startMs = Number(o.startMs);
 
-        const durationSec = Math.max(60, Math.round(o.durationSec || 3600));
+        const durationSec = Math.max(60, Math.min(MAX_DURATION_SEC, Math.round(o.durationSec || 3600)));
 
         const endMs = startMs + (durationSec + POST_PAD_SEC) * 1000;
 
@@ -156,46 +163,56 @@ const Scheduler = {
         return true;
     },
 
-    /** Marks a fired schedule with its outcome (called by the sweep). */
-    _finish(id, status, extra) {
+    /** Patches one entry's fields and persists (used post-fire). */
+    _patch(id, patch) {
         const list = load();
 
         const e = list.find(x => x.id === id);
 
-        if (!e) return;
-
-        e.status = status;
-
-        if (extra) Object.assign(e, extra);
-
-        save(list);
+        if (e) { Object.assign(e, patch); save(list); }
     },
 
     /** Fire anything due; mark anything whose window fully passed as missed. */
     async sweep() {
-        const now = Date.now();
+        // Guard against overlapping sweeps (a slow fire can outlast the interval)
+        // so a job can't be started twice.
+        if (sweeping) return;
 
-        const list = load();
+        sweeping = true;
 
-        for (const e of list) {
-            if (e.status !== 'scheduled') continue;
+        try {
+            const now = Date.now();
 
-            if (now >= e.endMs) { Scheduler._finish(e.id, 'missed'); continue; }
+            const list = load();
 
-            if (now >= e.startMs && fireFn) {
-                // Mark first so a slow fire isn't double-triggered by the next sweep.
-                Scheduler._finish(e.id, 'recording');
+            const toFire = [];
 
+            let dirty = false;
+
+            // One pass: mark due entries and missed entries, persist once.
+            for (const e of list) {
+                if (e.status !== 'scheduled') continue;
+
+                if (now >= e.endMs) { e.status = 'missed'; dirty = true; continue; }
+
+                if (now >= e.startMs && fireFn) { e.status = 'recording'; dirty = true; toFire.push({ ...e }); }
+            }
+
+            if (dirty) save(list);
+
+            for (const e of toFire) {
                 const remainingSec = Math.max(60, Math.round((e.endMs - now) / 1000));
 
                 try {
                     const rec = await fireFn({ ...e, minutes: remainingSec / 60 });
 
-                    Scheduler._finish(e.id, 'recording', { recordingId: rec && rec.id });
+                    Scheduler._patch(e.id, { recordingId: rec && rec.id });
                 } catch (err) {
-                    Scheduler._finish(e.id, 'failed', { error: String(err && err.message || err) });
+                    Scheduler._patch(e.id, { status: 'failed', error: String(err && err.message || err) });
                 }
             }
+        } finally {
+            sweeping = false;
         }
     },
 

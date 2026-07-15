@@ -9,10 +9,15 @@ const path = require('path');
 const crypto = require('crypto');
 
 const { baseDir } = require('./paths');
+const { atomicWrite } = require('./fsatomic');
 
 const DATA_DIR = path.join(baseDir(), 'data');
 
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
+
+// A fixed salt used to burn an equal scrypt cost for unknown usernames, so
+// login timing doesn't reveal which usernames exist.
+const DUMMY_SALT = 'tablo4u-timing-guard';
 
 /**
  * @typedef {Object} User
@@ -38,7 +43,7 @@ function save(users) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
     }
 
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), { mode: 0o600 });
+    atomicWrite(USERS_FILE, JSON.stringify(users, null, 2), 0o600);
 }
 
 /**
@@ -154,6 +159,7 @@ const Auth = {
         const user = load().find(u => u.username === username);
 
         if (!user) {
+            hashPw(password, DUMMY_SALT); // burn equal cost so timing doesn't leak valid usernames
             return null;
         }
 
