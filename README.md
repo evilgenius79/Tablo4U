@@ -121,6 +121,12 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 | `OPEN` | off | Set `OPEN=1` to disable login (LAN convenience) |
 | `MOCK` | off | Set `MOCK=1` for sample data + test-pattern stream |
 | `SESSION_SECRET` | random | Set a fixed value so sessions survive restarts |
+| `OTT_TRANSCODE` | off | Re-encode OTT feeds (smooths ad-break discontinuities, uses CPU) instead of the default `-c copy` remux |
+| `OTT_DIRECT_HLS` | off | Play OTT's HLS directly in the browser (hls.js, no server ffmpeg) — needs the OTT CDN to allow CORS |
+| `STREAM_DEBUG` | off | Print ffmpeg progress (speed=, fps, drops) to the console |
+| `TRUST_PROXY` | off | Set `TRUST_PROXY=1` behind a reverse proxy so the real client IP is read from `X-Forwarded-*` |
+| `SECURE_COOKIES` | off | Set `SECURE_COOKIES=1` to mark the session cookie `Secure` (HTTPS only) |
+| `MAX_NON_TUNER_FFMPEG` | `8` | Cap on concurrent OTT (non-tuner) ffmpeg processes |
 
 > The **tuner count is read from the device** after login (`/server/info`), not
 > from config — so it's always correct and there's no `TUNER_COUNT` to set.
@@ -253,6 +259,10 @@ Early but functional. The guide, data API, multi-user auth, and the streaming
 pipeline are working; the player has been verified end-to-end (real OTA
 playback needs a full ffmpeg on the host). Expect rough edges — issues and PRs
 welcome.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ## Credits
 
