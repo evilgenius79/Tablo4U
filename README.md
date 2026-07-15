@@ -163,10 +163,51 @@ All endpoints require a session (unless `OPEN=1`):
 
 ## Security
 
-- Do **not** expose this server to the internet — it fronts your Tablo. Keep it
-  on your LAN (or behind a VPN / your own reverse proxy with TLS).
+- This server fronts your Tablo, so treat access to it like access to your
+  device. On a trusted LAN you can even run it open (`OPEN=1`); anywhere else,
+  keep sign-in **on**.
 - Passwords are scrypt-hashed; `data/users.json` is written owner-only.
 - Set `SESSION_SECRET` in production so sessions persist and aren't guessable.
+- Never expose it to the internet with `OPEN=1` — that would let anyone who
+  finds the URL stream your tuners.
+
+## Remote access (watch away from home)
+
+Tablo4U works great over the internet — you just need to reach it securely.
+Pick one:
+
+- **VPN (simplest & safest):** run something like [Tailscale](https://tailscale.com/)
+  or WireGuard, and reach Tablo4U at its LAN address from anywhere. Nothing is
+  publicly exposed.
+- **Reverse proxy with HTTPS:** put a proxy in front so traffic is encrypted and
+  the app isn't served over plain HTTP. If you do this:
+  - Keep **login on** (do **not** set `OPEN=1`) and use a **strong
+    `ADMIN_PASSWORD`**.
+  - Set a fixed **`SESSION_SECRET`** so logins survive restarts.
+  - Terminate **TLS** at the proxy (a real certificate — e.g. via Let's Encrypt).
+
+  Minimal [Caddy](https://caddyserver.com/) example (automatic HTTPS):
+
+  ```
+  tablo.example.com {
+      reverse_proxy localhost:3400
+  }
+  ```
+
+  Equivalent nginx `location` block:
+
+  ```nginx
+  location / {
+      proxy_pass http://127.0.0.1:3400;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $remote_addr;
+      proxy_buffering off;   # don't buffer the live MPEG-TS stream
+  }
+  ```
+
+  > `proxy_buffering off` (nginx) matters — buffering the live stream adds
+  > latency and can stall playback.
 
 ## Roadmap
 
