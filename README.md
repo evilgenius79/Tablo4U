@@ -43,6 +43,10 @@ laptop, phone, or TV browser without being locked into the official apps.
   the guide — click any upcoming show → *Schedule*. Recordings and live streams
   share the real tuner count so they can't oversubscribe the device, and
   scheduling checks for **tuner conflicts** upfront (OTA only; OTT is tuner-free).
+- 📡 **HDHomeRun too (optional)** — point it at an HDHomeRun on your LAN and its
+  channels merge right into the guide (program data borrowed from your Tablo by
+  channel number), stream from the device's direct URL, and show a **live signal
+  meter** while watching. Its tuners are tracked separately from the Tablo's.
 - ⭐ **Favorites & recently watched** — star channels (filter to just those),
   and jump back to what you were watching — saved per user.
 - 🔎 **Search** the guide by channel or program, and click any program for a
@@ -110,6 +114,7 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 |---|---|---|
 | `TABLO_EMAIL` / `TABLO_PASSWORD` | — | Your Tablo account (required unless `MOCK=1`) |
 | `TABLO_SERVER_ID` | first device | Pick a specific device if you have more than one |
+| `HDHR_URL` | — | Optional HDHomeRun base URL (e.g. `http://10.0.0.50`) to add its channels + signal meter |
 | `ADMIN_PASSWORD` | random | Admin password. Set it and it **always wins** — the admin login is (re)set to it on every start. Leave unset and a random one is generated + printed on first run. |
 | `PORT` | `3400` | Web UI port |
 | `RECORDINGS_DIR` | `./recordings` | Where DVR recordings are saved (a folder on the server; also changeable in-app) |
@@ -225,7 +230,8 @@ Pick one:
       with shared tuner accounting
 - [x] DVR: schedule recordings from the guide (click a future program), with
       upfront tuner-conflict checks
-- [ ] HDHomeRun support alongside Tablo (direct-URL streaming + signal meter)
+- [x] HDHomeRun support alongside Tablo (direct-URL streaming + live signal
+      meter, guide borrowed from Tablo by channel number, separate tuner pool)
 - [ ] Program reminders / "watch later"
 
 ## Status

@@ -25,6 +25,7 @@ const session = require('express-session');
 const crypto = require('crypto');
 
 const { TabloClient } = require('./tablo');
+const { HdhrClient } = require('./hdhr');
 const Auth = require('./auth');
 const { handleStream } = require('./stream');
 const recorder = require('./recorder');
@@ -40,6 +41,9 @@ const OPEN = process.env.OPEN == '1';
 
 /** @type {TabloClient|null} */
 var tablo = null;
+
+/** @type {HdhrClient|null} */
+var hdhr = null;
 
 /** channelId -> 'ota'|'ott' */
 const channelKind = new Map();
@@ -91,16 +95,24 @@ function indexKinds(channels) {
 
 /** @returns {Promise<any[]>} */
 async function getChannels() {
-    const channels = MOCK ? mock.channels : (tablo ? await tablo.getChannels() : []);
+    let channels = MOCK ? mock.channels : (tablo ? await tablo.getChannels() : []);
+
+    // Merge in HDHomeRun channels (tagged source:'hdhr'), if configured.
+    if (hdhr) {
+        try { channels = channels.concat(await hdhr.getChannels()); }
+        catch (err) { console.error('[tablo4u] HDHomeRun lineup failed:', err && err.message || err); }
+    }
 
     indexKinds(channels);
 
-    // Merge in HD/SD from the device (cached). Kick a background refresh when
-    // stale — never block the guide on 177 per-channel device requests.
+    // Merge in HD/SD from the Tablo device (cached). HDHR channels already carry
+    // their own resolution from the lineup, so skip those.
     if (!MOCK && tablo) {
         if (Date.now() - resCache.at > RES_TTL) warmResolutions();
 
         for (const ch of channels) {
+            if (ch.source === 'hdhr') continue;
+
             const r = resCache.map[ch.identifier];
 
             if (r) ch.resolution = r;
@@ -121,18 +133,20 @@ async function getGuideForDate(date) {
 
     if (cached && Date.now() - cached.at < GUIDE_TTL) return cached.data;
 
-    if (!tablo) return {};
-
     const channels = await getChannels();
 
     /** @type {Record<string, any[]>} */
     const out = {};
 
+    // Guide data comes from Tablo (HDHomeRun's free API has none). Fetch for the
+    // Tablo channels...
+    const tabloChannels = tablo ? channels.filter(c => c.source !== 'hdhr') : [];
+
     var i = 0;
 
     const worker = async () => {
-        while (i < channels.length) {
-            const ch = channels[i++];
+        while (i < tabloChannels.length) {
+            const ch = tabloChannels[i++];
 
             try {
                 out[ch.identifier] = await tablo.getChannelGuide(ch.identifier, date);
@@ -142,7 +156,25 @@ async function getGuideForDate(date) {
         }
     };
 
-    await Promise.all(Array.from({ length: Math.min(6, channels.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(6, tabloChannels.length) }, worker));
+
+    // ...then lend it to HDHomeRun channels on the same virtual channel number
+    // (both tune the same local broadcast, so the programming is identical).
+    const byNum = {};
+
+    for (const ch of tabloChannels) {
+        const k = ch.ota || ch.ott || {};
+
+        if (k.major != null) byNum[k.major + '.' + k.minor] = out[ch.identifier] || [];
+    }
+
+    for (const ch of channels) {
+        if (ch.source !== 'hdhr') continue;
+
+        const k = ch.ota || {};
+
+        out[ch.identifier] = byNum[k.major + '.' + k.minor] || [];
+    }
 
     guideCache.set(date, { at: Date.now(), data: out });
 
@@ -403,8 +435,20 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
         mock: MOCK,
         tablo,
         kindOf: (id) => channelKind.get(id),
+        hdhrUrlOf: (id) => hdhr ? hdhr.streamUrl(id) : undefined,
         log: (m) => console.log('[tablo4u] ' + m)
     });
+});
+
+// HDHomeRun live signal for a channel (only meaningful while it's tuned).
+app.get('/api/hdhr/signal/:channelId', requireAuth, async (req, res) => {
+    if (!hdhr) return res.status(404).json({ error: 'no HDHomeRun configured' });
+
+    try {
+        res.json({ signal: await hdhr.signalFor(req.params.channelId) });
+    } catch (err) {
+        res.status(502).json({ error: String(err && err.message || err) });
+    }
 });
 
 // ---- DVR / recordings ----
@@ -451,6 +495,7 @@ app.post('/api/recordings/start', requireAuth, async (req, res) => {
             channelId,
             channelName: channelName.get(channelId) || (req.body || {}).channelName || channelId,
             kind: channelKind.get(channelId) || (req.body || {}).kind,
+            hdhrUrl: hdhr ? hdhr.streamUrl(channelId) : undefined,
             title,
             minutes: Math.max(1, Math.min(360, parseInt(minutes, 10) || 60)),
             log: (m) => console.log('[tablo4u] ' + m)
@@ -624,6 +669,27 @@ app.use(requireAuth, (req, res, next) => {
         console.error('[tablo4u] No TABLO_EMAIL / TABLO_PASSWORD (and MOCK off). Data calls will error.');
     }
 
+    // Optional HDHomeRun (in addition to / instead of Tablo). Its channels merge
+    // into the guide; program data is borrowed from the Tablo guide by channel
+    // number. HDHR has its own tuners (separate pool).
+    if (!MOCK && process.env.HDHR_URL) {
+        hdhr = new HdhrClient(process.env.HDHR_URL);
+
+        try {
+            const info = await hdhr.connect();
+
+            tuners.setLimit(hdhr.tuners, 'hdhr');
+
+            await hdhr.getChannels(); // warm the id→URL map
+
+            console.log(`[tablo4u] HDHomeRun "${info.FriendlyName || info.ModelNumber || 'device'}" — ${hdhr.tuners} tuners at ${process.env.HDHR_URL}`);
+        } catch (err) {
+            console.error('[tablo4u] HDHomeRun connect failed:', err && err.message || err);
+
+            hdhr = null;
+        }
+    }
+
     // DVR scheduler: fire a scheduled recording by starting a normal recording.
     scheduler.setFire((entry) => recorder.start({
         mock: MOCK,
@@ -631,6 +697,7 @@ app.use(requireAuth, (req, res, next) => {
         channelId: entry.channelId,
         channelName: entry.channelName,
         kind: entry.kind,
+        hdhrUrl: hdhr ? hdhr.streamUrl(entry.channelId) : undefined,
         title: entry.title,
         minutes: entry.minutes,
         log: (m) => console.log('[tablo4u] (scheduled) ' + m)

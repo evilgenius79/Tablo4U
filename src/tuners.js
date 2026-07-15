@@ -1,31 +1,44 @@
 // @ts-check
 /**
- * @file Shared tuner-slot accounting. Both live streaming and recording draw
- * from the same physical OTA tuners, so they reserve/release through here to
- * avoid oversubscribing the device (e.g. 4 tuners → at most 4 concurrent OTA
- * streams+recordings). OTT never uses a tuner and never reserves.
+ * @file Tuner-slot accounting, per source pool. Live streaming and recording
+ * both draw from the same physical OTA tuners, so they reserve/release through
+ * here to avoid oversubscribing a device. Tablo and HDHomeRun have separate
+ * physical tuners, so each has its own pool. OTT never uses a tuner.
  */
 
-let limit = 4;
+/** @type {Record<string, {limit:number, count:number}>} */
+const pools = {
+    tablo: { limit: 4, count: 0 },
+    hdhr: { limit: 0, count: 0 }
+};
 
-let count = 0;
+function pool(name) {
+    if (!pools[name]) pools[name] = { limit: 4, count: 0 };
+
+    return pools[name];
+}
 
 module.exports = {
-    /** @param {number} n real tuner count from the device */
-    setLimit(n) { limit = Math.max(1, n || 4); },
+    /** @param {number} n @param {string} [name] */
+    setLimit(n, name = 'tablo') { pool(name).limit = Math.max(0, n || 0); },
 
-    getLimit() { return limit; },
+    /** @param {string} [name] */
+    getLimit(name = 'tablo') { return pool(name).limit; },
 
-    inUse() { return count; },
+    /** @param {string} [name] */
+    inUse(name = 'tablo') { return pool(name).count; },
 
-    /** Reserve one slot. @returns {boolean} false if all tuners are busy. */
-    tryReserve() {
-        if (count >= limit) return false;
+    /** Reserve one slot. @param {string} [name] @returns {boolean} false if the pool is full. */
+    tryReserve(name = 'tablo') {
+        const p = pool(name);
 
-        count += 1;
+        if (p.count >= p.limit) return false;
+
+        p.count += 1;
 
         return true;
     },
 
-    release() { count = Math.max(0, count - 1); }
+    /** @param {string} [name] */
+    release(name = 'tablo') { const p = pool(name); p.count = Math.max(0, p.count - 1); }
 };

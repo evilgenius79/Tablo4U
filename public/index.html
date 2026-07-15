@@ -83,6 +83,7 @@
     .resbadge.hd { background: var(--live); color: #04231a; }
     .resbadge.uhd { background: var(--accent); color: #fff; }
     .resbadge.sd { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+    .resbadge.hdhr { background: var(--accent2); color: #fff; }
     .chan .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .chan .net { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .star { flex: 0 0 auto; cursor: pointer; font-size: 17px; color: var(--muted); background: none;
@@ -355,6 +356,7 @@ function resBadge(ch) {
     if (r.startsWith('sd') || r.includes('480')) return '<span class="resbadge sd">SD</span>';
     return '';
 }
+function srcBadge(ch) { return ch.source === 'hdhr' ? '<span class="resbadge hdhr">HDHR</span>' : ''; }
 
 async function api(path, opts) {
     const r = await fetch(path, opts);
@@ -407,7 +409,7 @@ function buildRow(ch) {
     const isFav = favorites.has(ch.identifier);
     c.innerHTML =
         (logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="" onerror="this.parentNode.replaceChild(Object.assign(document.createElement('div'),{className:'logo nologo',textContent:this.dataset.call}),this)" data-call="${esc(chanCall(ch))}">` : `<div class="logo nologo">${esc(chanCall(ch))}</div>`)
-        + `<div class="meta"><div class="num">${esc(chanNum(ch))}${resBadge(ch)}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
+        + `<div class="meta"><div class="num">${esc(chanNum(ch))}${resBadge(ch)}${srcBadge(ch)}</div><div class="name">${esc(ch.name || '')}</div><div class="net">${esc(chanNet(ch))}</div></div>`
         + `<button class="star ${isFav ? 'fav' : ''}" title="Favorite">${isFav ? '★' : '☆'}</button>`;
     c.querySelector('.meta').onclick = () => watchChannel(ch);
     c.querySelector('.star').onclick = (e) => { e.stopPropagation(); toggleFav(ch); };
@@ -599,8 +601,10 @@ async function scheduleAiring(ch, a) {
 // ---- player ----
 let player = null;
 let hls = null;
+let signalTimer = null;      // HDHomeRun live signal polling
 let closingPlayer = false;   // true while we intentionally tear the stream down
 function destroyPlayer() {
+    if (signalTimer) { clearInterval(signalTimer); signalTimer = null; }
     if (player) {
         // Tear down in order (pause → unload → detach → destroy) to avoid the
         // mpegts.js "SourceBuffer removed from parent media source" race.
@@ -693,7 +697,19 @@ function watchChannel(ch, airing) {
     $('#pNote').textContent = ch.kind === 'ota'
         ? 'OTA channel — transcoding to H.264 on the server (takes a moment to start)…' : 'Starting stream…';
     const p = startPlayer('/api/stream/' + encodeURIComponent(ch.identifier), true);
-    if (p) p.on(mpegts.Events.MEDIA_INFO, () => { $('#pNote').textContent = ch.name + ' — live'; });
+    if (p) p.on(mpegts.Events.MEDIA_INFO, () => { if (ch.source !== 'hdhr') $('#pNote').textContent = ch.name + ' — live'; });
+    // HDHomeRun exposes live signal strength — poll it while watching.
+    if (ch.source === 'hdhr') {
+        const poll = async () => {
+            try {
+                const j = await api('/api/hdhr/signal/' + encodeURIComponent(ch.identifier));
+                if (j && j.signal) $('#pNote').textContent = `${ch.name} — live · signal ${j.signal.strength}% · quality ${j.signal.quality}%`;
+                else $('#pNote').textContent = ch.name + ' — live';
+            } catch { /* ignore */ }
+        };
+        signalTimer = setInterval(poll, 3000);
+        setTimeout(poll, 1500);
+    }
   } catch (e) {
     $('#pNote').textContent = 'Could not start player: ' + (e && e.message || e);
   }

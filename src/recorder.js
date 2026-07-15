@@ -104,6 +104,7 @@ function stamp(d) {
  * @param {string} o.channelId
  * @param {string} o.channelName
  * @param {'ota'|'ott'|undefined} o.kind
+ * @param {string} [o.hdhrUrl] direct HDHomeRun stream URL (for HDHR channels)
  * @param {string} [o.title]
  * @param {number} o.minutes
  * @param {(m:string)=>void} [o.log]
@@ -112,9 +113,13 @@ function stamp(d) {
 async function start(o) {
     const isOtt = o.kind === 'ott';
 
+    const isHdhr = String(o.channelId || '').startsWith('hdhr:');
+
+    const poolName = isHdhr ? 'hdhr' : 'tablo';
+
     const usesTuner = !isOtt && !o.mock;
 
-    if (usesTuner && !tuners.tryReserve()) {
+    if (usesTuner && !tuners.tryReserve(poolName)) {
         throw new Error('All tuners are in use — cannot start recording.');
     }
 
@@ -134,11 +139,11 @@ async function start(o) {
     let args;
 
     try {
-        args = await buildArgs({ mock: o.mock, tablo: o.tablo, channelId: o.channelId, isOtt, out: file, durationSec });
+        args = await buildArgs({ mock: o.mock, tablo: o.tablo, channelId: o.channelId, isOtt, hdhrUrl: o.hdhrUrl, out: file, durationSec });
     } catch (err) {
-        if (usesTuner) tuners.release();
+        if (usesTuner) tuners.release(poolName);
 
-        throw new Error('watch failed: ' + (err && err.message || err));
+        throw new Error('stream failed: ' + (err && err.message || err));
     }
 
     const meta = {
@@ -164,7 +169,7 @@ async function start(o) {
 
     active.set(id, { proc: ffmpeg, meta });
 
-    log(`record start "${meta.title}" (${o.channelName}) → ${base}${usesTuner ? ` [${tuners.inUse()}/${tuners.getLimit()}]` : ' (ott, no tuner)'}`);
+    log(`record start "${meta.title}" (${o.channelName}) → ${base}${usesTuner ? ` [${poolName} ${tuners.inUse(poolName)}/${tuners.getLimit(poolName)}]` : ' (ott, no tuner)'}`);
 
     if (process.env.STREAM_DEBUG == '1') {
         ffmpeg.stderr.on('data', (d) => process.stderr.write('[rec] ' + d));
@@ -177,7 +182,7 @@ async function start(o) {
 
         active.delete(id);
 
-        if (usesTuner) tuners.release();
+        if (usesTuner) tuners.release(poolName);
 
         meta.endedAt = Date.now();
 
