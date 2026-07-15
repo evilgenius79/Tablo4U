@@ -18,9 +18,11 @@ laptop, phone, or TV browser without being locked into the official apps.
 > the guide to XMLTV), Tablo4U skips all the translation and exposes Tablo
 > **directly** as a web app. Same reverse-engineered auth, native data.
 
-![Tablo4U guide](docs/guide.png)
+![Tablo4U guide](docs/guide.jpg)
 
-![Multi-user admin](docs/admin.png)
+![In-browser live player](docs/player.jpg)
+
+![Program details](docs/program.jpg)
 
 ---
 
