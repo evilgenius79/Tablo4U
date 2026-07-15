@@ -177,6 +177,13 @@ class TabloClient {
         // official client uses
         const url = new URL(path, this.device.url);
 
+        // `path` can carry request-derived pieces (e.g. a channel id). Refuse
+        // anything that resolves off the device (absolute http://… or //host
+        // paths would silently retarget the signed request — SSRF).
+        if (url.origin !== new URL(this.device.url).origin) {
+            throw new Error('device path resolves outside the device');
+        }
+
         url.search = 'lh';
 
         const res = await fetch(url.toString(), {

@@ -14,6 +14,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { pipeline } = require('stream');
 
 const { baseDir } = require('./paths');
 
@@ -51,10 +52,31 @@ const channelKind = new Map();
 /** channelId -> display name (for recording metadata). */
 const channelName = new Map();
 
-/** In-memory guide cache: date -> { at, data }. */
+// Channel ids are interpolated into signed device request paths
+// (/guide/channels/<id>/watch), so only accept the shapes Tablo/HDHR actually
+// use (S1_004_01, O1_206_00, hdhr:5.1) — never slashes or dots that could
+// traverse to another device endpoint.
+const SAFE_CHANNEL_ID = /^[A-Za-z0-9_:.-]{1,64}$/;
+
+/** @param {any} id */
+function isSafeChannelId(id) {
+    return typeof id === 'string' && SAFE_CHANNEL_ID.test(id) && !id.includes('..');
+}
+
+/** In-memory guide cache: date -> { at, promise }. */
 const guideCache = new Map();
 
 const GUIDE_TTL = 5 * 60 * 1000;
+
+// A handful of days is all the UI can ask for; keep the cache bounded so
+// distinct date strings can't grow memory forever.
+const GUIDE_CACHE_MAX = 8;
+
+/** Cached merged channel lineup (Tablo cloud + HDHR), to avoid re-fetching on
+ * every /api/channels call and guide-cache miss. */
+let lineupCache = { at: 0, data: /** @type {any[]|null} */ (null), promise: null };
+
+const LINEUP_TTL = 5 * 60 * 1000;
 
 // channel_identifier -> resolution ("hd_1080"|"sd"|…), from the device. Warmed
 // in the background (177 per-channel device requests) since the cloud lineup
@@ -97,14 +119,36 @@ function indexKinds(channels) {
     }
 }
 
-/** @returns {Promise<any[]>} */
-async function getChannels() {
-    let channels = MOCK ? mock.channels : (tablo ? await tablo.getChannels() : []);
+/** Fetches Tablo + HDHR lineups (uncached). @returns {Promise<any[]>} */
+async function fetchLineup() {
+    let channels = tablo ? await tablo.getChannels() : [];
 
     // Merge in HDHomeRun channels (tagged source:'hdhr'), if configured.
     if (hdhr) {
         try { channels = channels.concat(await hdhr.getChannels()); }
         catch (err) { console.error('[tablo4u] HDHomeRun lineup failed:', err && err.message || err); }
+    }
+
+    return channels;
+}
+
+/** @returns {Promise<any[]>} */
+async function getChannels() {
+    let channels;
+
+    if (MOCK) {
+        channels = mock.channels;
+    } else if (lineupCache.data && Date.now() - lineupCache.at < LINEUP_TTL) {
+        channels = lineupCache.data;
+    } else {
+        // Coalesce concurrent misses into one upstream fetch; only cache success.
+        if (!lineupCache.promise) {
+            lineupCache.promise = fetchLineup()
+                .then((chs) => { lineupCache = { at: Date.now(), data: chs, promise: null }; return chs; })
+                .catch((err) => { lineupCache.promise = null; throw err; });
+        }
+
+        channels = await lineupCache.promise;
     }
 
     indexKinds(channels);
@@ -126,17 +170,56 @@ async function getChannels() {
     return channels;
 }
 
+/** Drop expired entries, then oldest ones if the cache is still over budget. */
+function pruneGuideCache() {
+    const now = Date.now();
+
+    for (const [d, e] of guideCache) {
+        if (now - e.at >= GUIDE_TTL) guideCache.delete(d);
+    }
+
+    while (guideCache.size > GUIDE_CACHE_MAX) {
+        let oldest = null;
+
+        for (const [d, e] of guideCache) {
+            if (!oldest || e.at < oldest.at) oldest = { d, at: e.at };
+        }
+
+        guideCache.delete(oldest.d);
+    }
+}
+
+/**
+ * Cached guide lookup. Concurrent requests for the same date share one fetch
+ * (a full fetch is one cloud call per channel — well worth coalescing).
+ *
+ * @param {string} date
+ * @returns {Promise<Record<string, any[]>>}
+ */
+function getGuideForDate(date) {
+    if (MOCK) return Promise.resolve(mock.guide);
+
+    const cached = guideCache.get(date);
+
+    if (cached && Date.now() - cached.at < GUIDE_TTL) return cached.promise;
+
+    const entry = { at: Date.now(), promise: fetchGuideForDate(date) };
+
+    // Don't cache failures — let the next request retry.
+    entry.promise.catch(() => { if (guideCache.get(date) === entry) guideCache.delete(date); });
+
+    guideCache.set(date, entry);
+
+    pruneGuideCache();
+
+    return entry.promise;
+}
+
 /**
  * @param {string} date
  * @returns {Promise<Record<string, any[]>>}
  */
-async function getGuideForDate(date) {
-    if (MOCK) return mock.guide;
-
-    const cached = guideCache.get(date);
-
-    if (cached && Date.now() - cached.at < GUIDE_TTL) return cached.data;
-
+async function fetchGuideForDate(date) {
     const channels = await getChannels();
 
     /** @type {Record<string, any[]>} */
@@ -179,8 +262,6 @@ async function getGuideForDate(date) {
 
         out[ch.identifier] = byNum[k.major + '.' + k.minor] || [];
     }
-
-    guideCache.set(date, { at: Date.now(), data: out });
 
     return out;
 }
@@ -247,12 +328,56 @@ function loadStatic() {
 
 loadStatic();
 
+/**
+ * Session-cookie secret: the SESSION_SECRET env wins; otherwise generate one
+ * once and persist it (owner-only) in data/, so logins survive restarts
+ * instead of being dumped on every boot by a fresh random secret.
+ * @returns {string}
+ */
+function sessionSecret() {
+    if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+
+    const file = path.join(baseDir(), 'data', 'session-secret');
+
+    try {
+        const s = fs.readFileSync(file, 'utf8').trim();
+
+        if (s) return s;
+    } catch { /* not created yet */ }
+
+    const s = crypto.randomBytes(32).toString('hex');
+
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+
+        fs.writeFileSync(file, s, { mode: 0o600 });
+    } catch { /* read-only fs — fall back to a per-boot secret */ }
+
+    return s;
+}
+
 const app = express();
+
+app.disable('x-powered-by');
+
+// Behind a reverse proxy (see README "Remote access"), set TRUST_PROXY=1 so
+// req.ip reflects the real client (login rate limiting keys on it).
+if (process.env.TRUST_PROXY == '1') app.set('trust proxy', 1);
+
+app.use((req, res, next) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+
+    res.set('X-Frame-Options', 'DENY');
+
+    res.set('Referrer-Policy', 'no-referrer');
+
+    next();
+});
 
 app.use(express.json());
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || crypto.randomBytes(16).toString('hex'),
+    secret: sessionSecret(),
     resave: false,
     saveUninitialized: false,
     cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 }
@@ -278,17 +403,74 @@ function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'admin only' });
 }
 
+// ---- login rate limiting (in-memory) ----
+// Keyed per client + target account so a brute-force run locks that pairing
+// out for a window without collateral damage to other users.
+
+/** @type {Map<string, {count:number, firstAt:number}>} */
+const loginFails = new Map();
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+
+const LOGIN_MAX_FAILS = 10;
+
+function loginBlocked(key) {
+    const e = loginFails.get(key);
+
+    if (!e) return false;
+
+    if (Date.now() - e.firstAt > LOGIN_WINDOW_MS) { loginFails.delete(key); return false; }
+
+    return e.count >= LOGIN_MAX_FAILS;
+}
+
+function recordLoginFail(key) {
+    const now = Date.now();
+
+    const e = loginFails.get(key);
+
+    if (!e || now - e.firstAt > LOGIN_WINDOW_MS) {
+        loginFails.set(key, { count: 1, firstAt: now });
+    } else {
+        e.count += 1;
+    }
+
+    // Keep the map bounded — drop expired windows if it ever grows large.
+    if (loginFails.size > 1000) {
+        for (const [k, v] of loginFails) {
+            if (now - v.firstAt > LOGIN_WINDOW_MS) loginFails.delete(k);
+        }
+    }
+}
+
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body || {};
 
+    const key = req.ip + '|' + String(username || '').trim().toLowerCase();
+
+    if (loginBlocked(key)) {
+        return res.status(429).json({ error: 'too many failed logins — try again in a few minutes' });
+    }
+
     const user = Auth.verify(username, password);
 
-    if (!user) return res.status(401).json({ error: 'invalid credentials' });
+    if (!user) {
+        recordLoginFail(key);
 
-    // @ts-ignore
-    req.session.user = { username: user.username, role: user.role };
+        return res.status(401).json({ error: 'invalid credentials' });
+    }
 
-    res.json({ ok: true, user: { username: user.username, role: user.role } });
+    loginFails.delete(key);
+
+    // Issue a fresh session id on login so a pre-auth cookie can't be fixated.
+    req.session.regenerate((err) => {
+        if (err) return res.status(500).json({ error: 'session error' });
+
+        // @ts-ignore
+        req.session.user = { username: user.username, role: user.role };
+
+        res.json({ ok: true, user: { username: user.username, role: user.role } });
+    });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -343,6 +525,12 @@ app.get('/api/channels', requireAuth, async (req, res) => {
 
 app.get('/api/guide', requireAuth, async (req, res) => {
     const date = String(req.query.date || new Date().toISOString().slice(0, 10));
+
+    // The date becomes a cloud API path segment and a cache key — only accept
+    // a real YYYY-MM-DD.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'invalid date (expected YYYY-MM-DD)' });
+    }
 
     try {
         res.json({ date, guide: await getGuideForDate(date) });
@@ -428,6 +616,8 @@ app.get('/api/device/probe', requireAuth, requireAdmin, async (req, res) => {
 
 // Live player stream (MPEG-TS; played by mpegts.js in the browser).
 app.get('/api/stream/:channelId', requireAuth, (req, res) => {
+    if (!isSafeChannelId(req.params.channelId)) return res.status(400).send('invalid channel id');
+
     // @ts-ignore - record recently-watched for the signed-in user
     const user = req.session && req.session.user;
 
@@ -448,6 +638,8 @@ app.get('/api/stream/:channelId', requireAuth, (req, res) => {
 app.get('/api/hdhr/signal/:channelId', requireAuth, async (req, res) => {
     if (!hdhr) return res.status(404).json({ error: 'no HDHomeRun configured' });
 
+    if (!isSafeChannelId(req.params.channelId)) return res.status(400).json({ error: 'invalid channel id' });
+
     try {
         res.json({ signal: await hdhr.signalFor(req.params.channelId) });
     } catch (err) {
@@ -467,6 +659,8 @@ app.post('/api/recordings/schedule', requireAuth, (req, res) => {
         const { channelId, title, startMs, durationSec } = req.body || {};
 
         if (!channelId || !startMs) return res.status(400).json({ error: 'channelId and startMs required' });
+
+        if (!isSafeChannelId(channelId)) return res.status(400).json({ error: 'invalid channel id' });
 
         const entry = scheduler.add({
             channelId,
@@ -492,6 +686,8 @@ app.post('/api/recordings/start', requireAuth, async (req, res) => {
         const { channelId, title, minutes } = req.body || {};
 
         if (!channelId) return res.status(400).json({ error: 'channelId required' });
+
+        if (!isSafeChannelId(channelId)) return res.status(400).json({ error: 'invalid channel id' });
 
         const meta = await recorder.start({
             mock: MOCK,
@@ -554,11 +750,14 @@ app.get('/api/recordings/:id/file', requireAuth, (req, res) => {
         res.setHeader('Content-Range', `bytes ${startB}-${endB}/${size}`);
         res.setHeader('Content-Length', endB - startB + 1);
 
-        fs.createReadStream(rec.file, { start: startB, end: endB }).pipe(res);
+        // pipeline (not .pipe) so an aborted request destroys the read stream —
+        // seeking fires many quickly-abandoned range requests, and each leaked
+        // stream would hold a file descriptor.
+        pipeline(fs.createReadStream(rec.file, { start: startB, end: endB }), res, () => {});
     } else {
         res.setHeader('Content-Length', size);
 
-        fs.createReadStream(rec.file).pipe(res);
+        pipeline(fs.createReadStream(rec.file), res, () => {});
     }
 });
 
@@ -585,6 +784,8 @@ app.get('/api/profile', requireAuth, (req, res) => {
 });
 
 app.put('/api/favorites/:channelId', requireAuth, (req, res) => {
+    if (!isSafeChannelId(req.params.channelId)) return res.status(400).json({ error: 'invalid channel id' });
+
     // @ts-ignore
     const user = req.session && req.session.user;
 
@@ -594,6 +795,8 @@ app.put('/api/favorites/:channelId', requireAuth, (req, res) => {
 });
 
 app.delete('/api/favorites/:channelId', requireAuth, (req, res) => {
+    if (!isSafeChannelId(req.params.channelId)) return res.status(400).json({ error: 'invalid channel id' });
+
     // @ts-ignore
     const user = req.session && req.session.user;
 
@@ -615,6 +818,10 @@ function sendStatic(res, url) {
     if (!asset) return false;
 
     res.set('Content-Type', asset.type);
+
+    // Vendor libs (~630 KB of player JS) only change with a release — let the
+    // browser keep them for a day. Everything else revalidates via ETag (304).
+    res.set('Cache-Control', url.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-cache');
 
     res.send(asset.body);
 

@@ -50,6 +50,9 @@ function hashPw(password, salt) {
     return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
+/** Salt for equalizing verify() timing when the username doesn't exist. */
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
+
 /**
  * @param {string} a
  * @param {string} b
@@ -154,6 +157,10 @@ const Auth = {
         const user = load().find(u => u.username === username);
 
         if (!user) {
+            // Burn the same scrypt cost as a real check so response timing
+            // doesn't reveal which usernames exist.
+            hashPw(password, DUMMY_SALT);
+
             return null;
         }
 

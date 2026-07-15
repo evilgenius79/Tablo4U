@@ -98,7 +98,9 @@ const Scheduler = {
     add(o) {
         const startMs = Number(o.startMs);
 
-        const durationSec = Math.max(60, Math.round(o.durationSec || 3600));
+        // Clamp to the same 6h ceiling as manual recordings — an unbounded
+        // duration would let one schedule record (and fill the disk) forever.
+        const durationSec = Math.min(360 * 60, Math.max(60, Math.round(o.durationSec || 3600)));
 
         const endMs = startMs + (durationSec + POST_PAD_SEC) * 1000;
 

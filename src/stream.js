@@ -240,6 +240,11 @@ async function handleStream(req, res, opts) {
     req.on('close', cleanup);
 
     res.on('close', cleanup);
+
+    // If the client vanished during the async watch-session setup, the 'close'
+    // events already fired before the handlers above were attached — without
+    // this check ffmpeg would run (and hold the tuner) indefinitely.
+    if (req.destroyed || res.destroyed) cleanup();
 }
 
 module.exports = { handleStream, buildArgs, mockArgs, otaArgs, ottArgs, getPlaylistUrl };

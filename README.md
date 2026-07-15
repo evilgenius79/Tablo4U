@@ -120,7 +120,8 @@ npm run mock                # sample guide + a test-pattern you can "watch"
 | `RECORDINGS_DIR` | `./recordings` | Where DVR recordings are saved (a folder on the server; also changeable in-app) |
 | `OPEN` | off | Set `OPEN=1` to disable login (LAN convenience) |
 | `MOCK` | off | Set `MOCK=1` for sample data + test-pattern stream |
-| `SESSION_SECRET` | random | Set a fixed value so sessions survive restarts |
+| `SESSION_SECRET` | auto | Auto-generated on first start and persisted in `data/session-secret`; set a fixed value to override |
+| `TRUST_PROXY` | off | Set `TRUST_PROXY=1` behind a reverse proxy so the real client IP is used (login rate limiting) |
 
 > The **tuner count is read from the device** after login (`/server/info`), not
 > from config — so it's always correct and there's no `TUNER_COUNT` to set.
@@ -178,7 +179,9 @@ All endpoints require a session (unless `OPEN=1`):
   device. On a trusted LAN you can even run it open (`OPEN=1`); anywhere else,
   keep sign-in **on**.
 - Passwords are scrypt-hashed; `data/users.json` is written owner-only.
-- Set `SESSION_SECRET` in production so sessions persist and aren't guessable.
+- Failed logins are rate-limited (10 per 15 minutes per client + account).
+- The session secret is auto-generated and persisted in `data/session-secret`
+  (owner-only), so sessions survive restarts; set `SESSION_SECRET` to override.
 - Never expose it to the internet with `OPEN=1` — that would let anyone who
   finds the URL stream your tuners.
 
@@ -194,7 +197,8 @@ Pick one:
   the app isn't served over plain HTTP. If you do this:
   - Keep **login on** (do **not** set `OPEN=1`) and use a **strong
     `ADMIN_PASSWORD`**.
-  - Set a fixed **`SESSION_SECRET`** so logins survive restarts.
+  - Set **`TRUST_PROXY=1`** so login rate limiting sees the real client IP
+    (instead of the proxy's).
   - Terminate **TLS** at the proxy (a real certificate — e.g. via Let's Encrypt).
 
   Minimal [Caddy](https://caddyserver.com/) example (automatic HTTPS):

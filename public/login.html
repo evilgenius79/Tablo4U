@@ -38,10 +38,15 @@
 <script>
 document.getElementById('f').onsubmit = async (e) => {
     e.preventDefault();
-    const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value }) });
-    if (r.ok) location.href = '/';
-    else document.getElementById('err').textContent = 'Invalid credentials';
+    try {
+        const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value }) });
+        if (r.ok) { location.href = '/'; return; }
+        const j = await r.json().catch(() => ({}));
+        document.getElementById('err').textContent = j.error || 'Invalid credentials';
+    } catch {
+        document.getElementById('err').textContent = 'Could not reach the server';
+    }
 };
 </script>
 </body>
