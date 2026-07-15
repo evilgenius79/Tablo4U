@@ -29,11 +29,11 @@ laptop, phone, or TV browser without being locked into the official apps.
   **picture-in-picture**. OTT channels are remuxed cheaply (already H.264) and
   **don't occupy a tuner**; OTA channels (MPEG-2/AC3) use a tuner and are
   transcoded to H.264/AAC by ffmpeg so they play in any modern browser.
-- ⏺ **DVR / recording** — record any channel to an MPEG-TS file on the server
-  (instant "● Rec" from the player), then play back, download, or delete it from
-  the **Recordings** view. Recordings and live streams share the real tuner
-  count so they can't oversubscribe the device (OTA only; OTT records without a
-  tuner). Save folder is configurable.
+- ⏺ **DVR / recording** — record any channel from the player's "● Rec" button,
+  either **to the server** (saved in the Recordings view to play back, download,
+  or delete) or **straight to the viewing computer** via a native Save dialog
+  (Chrome/Edge). Recordings and live streams share the real tuner count so they
+  can't oversubscribe the device (OTA only; OTT records without a tuner).
 - ⭐ **Favorites & recently watched** — star channels (filter to just those),
   and jump back to what you were watching — saved per user.
 - 🔎 **Search** the guide by channel or program, and click any program for a

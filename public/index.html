@@ -176,6 +176,11 @@
         <button class="ghost" id="logout" style="display:none">Log out</button>
     </header>
     <div id="fatal" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#b00020;color:#fff;padding:8px 12px;font:13px/1.4 system-ui;cursor:pointer;"></div>
+    <div id="pcRec" style="display:none;position:fixed;right:14px;bottom:14px;z-index:9998;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:none;align-items:center;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,.35)">
+        <span class="dot" style="width:10px;height:10px;border-radius:50%;background:var(--now)"></span>
+        <span id="pcRecText" style="font-size:13px"></span>
+        <button class="ghost" id="pcRecStop" style="padding:4px 10px;font-size:13px">■ Stop</button>
+    </div>
     <div id="grid">
         <div class="timeaxis" id="timeaxis"></div>
         <div id="nowline" style="display:none"></div>
@@ -265,7 +270,12 @@
                 <input id="recName" style="width:100%;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)">
                 <label style="display:block;color:var(--muted);font-size:12px;margin:12px 0 4px">Record for (minutes)</label>
                 <input id="recMinutes" type="number" min="1" max="360" value="60" style="width:120px;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)">
-                <div class="note" id="recDest" style="margin-top:12px"></div>
+                <label style="display:block;color:var(--muted);font-size:12px;margin:12px 0 4px">Save to</label>
+                <select id="recDestSel" style="width:100%;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text)">
+                    <option value="server">Server (saved in Recordings, plays back in-app)</option>
+                    <option value="pc">This computer (choose where to save)</option>
+                </select>
+                <div class="note" id="recDest" style="margin-top:10px"></div>
                 <div style="display:flex;gap:8px;margin-top:16px"><button id="recStart">● Start recording</button></div>
                 <div class="note" id="recMsg"></div>
             </div>
@@ -711,11 +721,32 @@ async function openRecord(ch, airing) {
     $('#recMsg').textContent = '';
     $('#recDest').textContent = '';
     $('#recordModal').classList.add('open');
-    try { const d = await api('/api/recordings'); if (d) { recDir = d.dir || ''; $('#recDest').textContent = recDir ? ('Saves to: ' + recDir) : ''; } } catch {}
+    try { const d = await api('/api/recordings'); if (d) recDir = d.dir || ''; } catch {}
+    updateRecDestNote();
 }
+function updateRecDestNote() {
+    const sel = $('#recDestSel') ? $('#recDestSel').value : 'server';
+    if (sel === 'pc') {
+        $('#recDest').textContent = window.showSaveFilePicker
+            ? 'A "Save as" dialog opens; the recording streams to that file until you stop it.'
+            : "This browser can't save directly to your computer — use Chrome/Edge, or pick Server.";
+    } else {
+        $('#recDest').textContent = recDir ? ('Saves to: ' + recDir) : '';
+    }
+}
+$('#recDestSel').onchange = updateRecDestNote;
 $('#recCancel').onclick = () => $('#recordModal').classList.remove('open');
 $('#recStart').onclick = async () => {
     if (!recTarget) return;
+    const dest = $('#recDestSel') ? $('#recDestSel').value : 'server';
+    if (dest === 'pc') {
+        $('#recMsg').textContent = '';
+        try {
+            const started = await startPcRecording(recTarget, $('#recName').value, parseInt($('#recMinutes').value, 10) || 0);
+            if (started) $('#recordModal').classList.remove('open');
+        } catch (e) { $('#recMsg').textContent = e.message || String(e); }
+        return;
+    }
     $('#recMsg').textContent = 'Starting…';
     try {
         const r = await fetch('/api/recordings/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -725,6 +756,49 @@ $('#recStart').onclick = async () => {
         $('#recordModal').classList.remove('open');
     } catch (e) { $('#recMsg').textContent = e.message; }
 };
+
+// ---- record to this computer (client-side, native Save dialog) ----
+// Streams a channel to a file the user picks on their own machine. No server
+// storage; runs until the duration elapses or they hit Stop. Chrome/Edge only
+// (File System Access API); falls back with a message elsewhere.
+let pcRec = null;
+async function startPcRecording(ch, title, minutes) {
+    if (!window.showSaveFilePicker) throw new Error("This browser can't save to your computer — use Chrome/Edge, or choose Server.");
+    const suggested = ((title || ch.name || 'recording').replace(/[^\w.-]+/g, '_')).slice(0, 80) + '.ts';
+    let handle;
+    try {
+        handle = await window.showSaveFilePicker({ suggestedName: suggested, types: [{ description: 'MPEG-TS video', accept: { 'video/mp2t': ['.ts'] } }] });
+    } catch { return false; } // user cancelled the dialog
+    const writable = await handle.createWritable();
+    const resp = await fetch('/api/stream/' + encodeURIComponent(ch.identifier));
+    if (!resp.ok || !resp.body) { try { await writable.close(); } catch {} throw new Error('Could not start the stream to record.'); }
+    const reader = resp.body.getReader();
+    pcRec = { reader, writable, active: true, bytes: 0, label: (title || ch.name) };
+    $('#pcRecText').textContent = 'Recording “' + pcRec.label + '” to your computer…';
+    $('#pcRec').style.display = 'flex';
+    if (minutes > 0) pcRec.timer = setTimeout(stopPcRecording, minutes * 60000);
+    (async () => {
+        try {
+            while (pcRec && pcRec.active) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                await writable.write(value);
+                pcRec.bytes += value.length;
+                $('#pcRecText').textContent = 'Recording “' + pcRec.label + '” — ' + Math.round(pcRec.bytes / 1e6) + ' MB';
+            }
+        } catch { /* stopped/aborted */ }
+        finally { try { await writable.close(); } catch {} $('#pcRec').style.display = 'none'; }
+    })();
+    return true;
+}
+function stopPcRecording() {
+    if (!pcRec) return;
+    pcRec.active = false;
+    if (pcRec.timer) clearTimeout(pcRec.timer);
+    try { pcRec.reader.cancel(); } catch {}
+    pcRec = null;
+}
+$('#pcRecStop').onclick = stopPcRecording;
 
 $('#dvrBtn').onclick = () => { $('#dvrMsg').textContent = ''; $('#dvrModal').classList.add('open'); refreshDvr(); };
 $('#dvrClose').onclick = () => $('#dvrModal').classList.remove('open');
