@@ -85,6 +85,36 @@ class TabloClient {
         this.uuid = crypto.randomUUID();
 
         this.ready = false;
+
+        /** In-flight re-login, so concurrent 401s trigger only one. @type {Promise<any>|null} */
+        this._relogin = null;
+    }
+
+    /**
+     * Runs a cloud call; if it fails because the session token expired (401),
+     * re-logins once (deduped across concurrent callers) and retries. Without
+     * this, a long-running server loses the guide when the token lapses and
+     * only a restart fixes it.
+     *
+     * @template T
+     * @param {() => Promise<T>} fn
+     * @returns {Promise<T>}
+     */
+    async withRelogin(fn) {
+        try {
+            return await fn();
+        } catch (err) {
+            // Only retry an established session — never loop a failing first login.
+            if (!this.ready || !/-> 401\b/.test(String(err && err.message || ''))) throw err;
+
+            if (!this._relogin) {
+                this._relogin = this.login().finally(() => { this._relogin = null; });
+            }
+
+            await this._relogin;
+
+            return await fn();
+        }
     }
 
     /**
@@ -292,10 +322,10 @@ class TabloClient {
      * @returns {Promise<any[]>}
      */
     async getChannels() {
-        const data = await this.cloud('GET', `/api/v2/account/${this.lighthouse}/guide/channels/`, undefined, {
+        const data = await this.withRelogin(() => this.cloud('GET', `/api/v2/account/${this.lighthouse}/guide/channels/`, undefined, {
             Authorization: this.authorization,
             Lighthouse: this.lighthouse
-        });
+        }));
 
         return Array.isArray(data) ? data : [];
     }
@@ -308,10 +338,10 @@ class TabloClient {
      * @returns {Promise<any[]>}
      */
     async getChannelGuide(channelId, date) {
-        const data = await this.cloud('GET', `/api/v2/account/guide/channels/${channelId}/airings/${date}/`, undefined, {
+        const data = await this.withRelogin(() => this.cloud('GET', `/api/v2/account/guide/channels/${channelId}/airings/${date}/`, undefined, {
             Authorization: this.authorization,
             Lighthouse: this.lighthouse
-        });
+        }));
 
         return Array.isArray(data) ? data : [];
     }
