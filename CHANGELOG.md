@@ -87,26 +87,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 ### Fixed
 - **OTT streaming**, definitively: OTT channels stream through the Tablo
   device's `/watch` session (a single HD H.264 rendition) — the same path the
-  official app uses — after earlier attempts to use the raw lineup/CDN URL
-  proved unreliable. Restores reliable, higher-quality OTT playback.
+  official app uses. Restores reliable, higher-quality OTT playback.
+- The optional direct-in-browser HLS path (`OTT_DIRECT_HLS`) remains available
+  for hosts whose OTT CDN allows CORS.
 
-## [0.5.3] — 2026-07-13
-
-### Fixed
-- Attempted fix for OTT feeds dying instantly by sending a browser User-Agent to
-  the CDN. (Superseded by 0.5.4.)
-
-## [0.5.2] — 2026-07-13
-
-### Added
-- OTT picks the highest HLS variant, with an optional direct-in-browser HLS path
-  (`OTT_DIRECT_HLS`). (OTT source later reverted to device `/watch` in 0.5.4.)
-
-## [0.5.1] — 2026-07-13
-
-### Changed
-- OTT streamed from the lineup URL instead of a device `/watch` request.
-  (Reverted in 0.5.4 — the device path is what the official app uses.)
+> Versions 0.5.1–0.5.3 (2026-07-13) were same-day iterations on OTT sourcing —
+> streaming from the raw lineup/CDN URL, picking the highest HLS variant, and
+> spoofing a browser User-Agent — all superseded by the device-`/watch`
+> approach in 0.5.4.
 
 ## [0.5.0] — 2026-07-12
 
@@ -227,9 +215,6 @@ and the project uses [Semantic Versioning](https://semver.org/).
 [0.5.6]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.6
 [0.5.5]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.5
 [0.5.4]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.4
-[0.5.3]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.3
-[0.5.2]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.2
-[0.5.1]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.1
 [0.5.0]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.5.0
 [0.4.9]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.4.9
 [0.4.8]: https://github.com/evilgenius79/Tablo4U/releases/tag/v0.4.8
