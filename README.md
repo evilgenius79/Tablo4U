@@ -108,6 +108,46 @@ first run (or set `ADMIN_PASSWORD` to choose your own).
 npm run mock                # sample guide + a test-pattern you can "watch"
 ```
 
+## Run from container (experimental)
+
+For use running in podman rather than bare metal.
+This is experimental and some features may not work properly.
+
+```bash
+# Remove any existing container, move on without errors if container doesn't exist
+podman rm -f tablotv-node-server || true
+
+# Build image
+podman build -t tablotv-node-server .
+
+# Define default location to store recordings on your local device
+# CHANGE THIS TO CHOOSE A DIFFERENT LOCATION FOR YOUR RECORDINGS TO BE SAVED TO
+LOCAL_MACHINE_RECORDINGS_DIR="$HOME/tablotv_recordings"
+mkdir -p "$LOCAL_MACHINE_RECORDINGS_DIR" # Create recordings folder safely if it doesn't exist
+mkdir -p "$LOCAL_MACHINE_RECORDINGS_DIR/data" # Create data folder to persist app data when creating new containers
+
+# If .env file doesn't exist, copy over from example
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "Edit .env to add TABLO_EMAIL and TABLO_PASSWORD before starting the container."
+fi
+
+# Run the container and mount a local volume to persist recordings
+podman run -d \
+  --name tablotv-node-server \
+  -p 3400:3400 \
+  -v "$LOCAL_MACHINE_RECORDINGS_DIR":/app/recordings:Z,U \
+  -v "$LOCAL_MACHINE_RECORDINGS_DIR/data":/app/data:Z,U \
+  -v "$PWD"/.env:/app/.env:Z,ro \
+  tablotv-node-server
+```
+
+To see container logs:
+
+```bash
+podman logs -f tablotv-node-server
+```
+
 ## Configuration (`.env`)
 
 | Variable | Default | Description |
